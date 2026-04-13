@@ -1777,7 +1777,8 @@
                   </div>
                   <button 
                     onClick={() => {
-                      const script = "<script>(function(){var start=Date.now();window.addEventListener('load',function(){var loadTime=Date.now()-start;fetch('https://api.pulsegrid.io/rum/" + (monitor.id || 'YOUR_MONITOR_ID') + "',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({loadTime:loadTime,url:window.location.href,referrer:document.referrer,timestamp:new Date().toISOString()})})})})();<\/script>";
+                      const endTag = "</scr" + "ipt>";
+                      const script = "<script>(function(){var start=Date.now();window.addEventListener('load',function(){var loadTime=Date.now()-start;fetch('https://api.pulsegrid.io/rum/" + (monitor.id || 'YOUR_MONITOR_ID') + "',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({loadTime:loadTime,url:window.location.href,referrer:document.referrer,timestamp:new Date().toISOString()})})})})();" + endTag;
                       navigator.clipboard.writeText(script);
                       setToast({ type: 'success', message: 'Script copied to clipboard!' });
                     }}
