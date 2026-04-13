@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PulseGrid - Test</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #050508; color: #E8E8F0; font-family: 'JetBrains Mono', monospace; min-height: 100vh; }
+    h1 { font-family: 'Syne', sans-serif; }
+    .card { background: #0D0D18; border: 1px solid #1A1A2E; border-radius: 12px; padding: 20px; }
+    .btn { background: #00F5FF; color: #000; font-weight: 600; padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer; }
+    .btn:hover { box-shadow: 0 0 20px rgba(0,245,255,0.6); }
+    .input { background: rgba(0,0,0,0.5); border: 1px solid #1A1A2E; border-radius: 8px; padding: 12px 16px; color: #E8E8F0; width: 100%; }
+    .input:focus { outline: none; border-color: #00F5FF; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+    const { LineChart, Line, ResponsiveContainer } = Recharts;
+
+    const API_BASE = 'http://localhost:5000/api';
+
+    function App() {
+      const [view, setView] = useState('landing');
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [monitors, setMonitors] = useState([]);
+      const [stats, setStats] = useState({ total: 0, up: 0, down: 0, slow: 0 });
+
+      const login = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        setError('');
+        try {
+          const res = await fetch(`${API_BASE}/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password })
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error);
+          localStorage.setItem('token', data.token);
+          localStorage.setItem('user', JSON.stringify(data.user));
+          setView('dashboard');
+          loadMonitors(data.token);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const loadMonitors = async (token) => {
+        try {
+          const res = await fetch(`${API_BASE}/monitors`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          const data = await res.json();
+          setMonitors(data.monitors || []);
+          const ups = (data.monitors || []).filter(m => m.status === 'up').length;
+          const downs = (data.monitors || []).filter(m => m.status === 'down').length;
+          const slow = (data.monitors || []).filter(m => m.status === 'slow').length;
+          setStats({ total: data.monitors?.length || 0, up: ups, down: downs, slow: slow });
+        } catch (err) {
+          console.error('Failed to load monitors:', err);
+        }
+      };
+
+      useEffect(() => {
+        const token = localStorage.getItem('token');
+        if (token) {
+          setView('dashboard');
+          loadMonitors(token);
+        }
+      }, []);
+
+      const logout = () => {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        setView('landing');
+        setMonitors([]);
+      };
+
+      if (view === 'landing') {
+        return (
+          <div className="min-h-screen flex items-center justify-center">
+            <div className="text-center">
+              <h1 className="text-5xl font-bold mb-4" style={{ color: '#00F5FF' }}>PulseGrid</h1>
+              <p className="text-gray-400 mb-8">API Monitoring for Developers</p>
+              <button className="btn" onClick={() => setView('login')}>Get Started</button>
+            </div>
+          </div>
+        );
+      }
+
+      if (view === 'login') {
+        return (
+          <div className="min-h-screen flex items-center justify-center">
+            <div className="card w-full max-w-md p-8">
+              <h2 className="text-2xl font-bold mb-6 text-center">Sign In</h2>
+              <form onSubmit={login} className="space-y-4">
+                <div>
+                  <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="input" placeholder="you@company.com" />
+                </div>
+                <div>
+                  <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="input" placeholder="Password" />
+                </div>
+                {error && <div className="text-red-400 text-sm">{error}</div>}
+                <button type="submit" className="btn w-full" disabled={loading}>
+                  {loading ? 'Signing in...' : 'Sign In'}
+                </button>
+              </form>
+              <p className="text-gray-500 text-sm mt-4 text-center">
+                No account? <button onClick={() => setView('landing')} className="text-cyan-400">Go back</button>
+              </p>
+              <div className="mt-6 p-4 bg-gray-900 rounded text-sm text-gray-400">
+                <p>Test credentials:</p>
+                <p>Email: test@pulsegrid.io</p>
+                <p>Password: password123</p>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen p-8">
+          <div className="flex justify-between items-center mb-8">
+            <h1 className="text-3xl font-bold" style={{ color: '#00F5FF' }}>PulseGrid</h1>
+            <button onClick={logout} className="btn">Logout</button>
+          </div>
+
+          <div className="grid grid-cols-4 gap-4 mb-8">
+            <div className="card">
+              <div className="text-gray-400 text-sm">Total Monitors</div>
+              <div className="text-4xl font-bold">{stats.total}</div>
+            </div>
+            <div className="card">
+              <div className="text-gray-400 text-sm">Up</div>
+              <div className="text-4xl font-bold text-green-400">{stats.up}</div>
+            </div>
+            <div className="card">
+              <div className="text-gray-400 text-sm">Slow</div>
+              <div className="text-4xl font-bold text-amber-400">{stats.slow}</div>
+            </div>
+            <div className="card">
+              <div className="text-gray-400 text-sm">Down</div>
+              <div className="text-4xl font-bold text-red-400">{stats.down}</div>
+            </div>
+          </div>
+
+          <div className="card">
+            <h2 className="text-xl font-bold mb-4">Your Monitors</h2>
+            {monitors.length === 0 ? (
+              <p className="text-gray-400">No monitors found. Create one via the API.</p>
+            ) : (
+              <div className="space-y-2">
+                {monitors.map(m => (
+                  <div key={m.id} className="flex items-center justify-between p-4 bg-gray-900 rounded">
+                    <div>
+                      <div className="font-medium">{m.name}</div>
+                      <div className="text-sm text-gray-500">{m.url}</div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <span className={`px-3 py-1 rounded text-sm ${
+                        m.status === 'up' ? 'bg-green-900 text-green-400' :
+                        m.status === 'down' ? 'bg-red-900 text-red-400' :
+                        'bg-amber-900 text-amber-400'
+                      }`}>
+                        {m.status.toUpperCase()}
+                      </span>
+                      {m.last_check && (
+                        <span className="text-gray-500 text-sm">{m.last_check.response_time_ms}ms</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
