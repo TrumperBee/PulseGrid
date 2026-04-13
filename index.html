@@ -1204,7 +1204,7 @@
         );
       };
 
-      const AddMonitorPage = ({ onSave, onBack, user }) => {
+    const AddMonitorPage = ({ onSave, onBack, user }) => {
       const [step, setStep] = useState(0);
       const [formData, setFormData] = useState({
         name: '', url: '', method: 'GET', interval: '60', timeout: 30, locations: ['kenya'],
@@ -1227,6 +1227,199 @@
         setErrors(errs);
         return Object.keys(errs).length === 0;
       };
+
+      const handleSubmit = async () => {
+        if (!validate()) return;
+        setLoading(true);
+        
+        try {
+          const monitorData = {
+            name: formData.name,
+            url: formData.url,
+            method: formData.method,
+            interval_seconds: parseInt(formData.interval),
+            timeout_seconds: parseInt(formData.timeout),
+            locations: formData.locations,
+            expected_status_code: parseInt(formData.expectedStatus),
+            max_response_ms: parseInt(formData.maxResponse),
+            sla_target: parseFloat(formData.sla_target),
+            tags: formData.tags
+          };
+
+          await apiCall('POST', '/monitors', monitorData);
+          setToast({ type: 'success', message: '[OK] Monitor created successfully!' });
+          setTimeout(() => onSave(), 1500);
+        } catch (err) {
+          setToast({ type: 'error', message: err.message || 'Failed to create monitor' });
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const intervals = [
+        { val: '30', label: 'Every 30s', desc: 'Fastest' },
+        { val: '60', label: 'Every 1 min', desc: 'Recommended' },
+        { val: '300', label: 'Every 5 min', desc: 'Standard' },
+      ];
+
+      const locations = [
+        { val: 'kenya', label: 'KE Nairobi', flag: '🇰🇪', free: true },
+        { val: 'germany', label: 'DE Frankfurt', flag: '🇩🇪', free: true },
+        { val: 'usa', label: 'US Virginia', flag: '🇺🇸', free: true },
+      ];
+
+      return (
+        <div className="p-4 md:p-6 max-w-3xl mx-auto">
+          {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+          <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white mb-4 md:mb-6">{ICONS.chevronLeft} Back</button>
+          <div className="flex items-center gap-3 mb-2">
+            <h1 className="text-xl md:text-2xl font-bold" style={{ fontFamily: 'Syne' }}>Add New Monitor</h1>
+            <span className="px-2 py-0.5 bg-cyan-900 text-cyan-400 text-xs font-bold rounded border border-cyan-700">PRO</span>
+          </div>
+          <p className="text-gray-400 mb-4 md:mb-6 text-sm md:text-base">Monitor your API endpoints for uptime and performance</p>
+
+          <div className="card-glass p-4 md:p-6 space-y-4 md:space-y-6">
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Monitor Name *</label>
+                <input type="text" value={formData.name} onChange={e => update('name', e.target.value)} className={`input-field ${errors.name ? 'border-red-500' : ''}`} placeholder="e.g. Production API" />
+                {errors.name && <p className="text-red-400 text-xs mt-1">{errors.name}</p>}
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">URL *</label>
+                <input type="text" value={formData.url} onChange={e => update('url', e.target.value)} className={`input-field ${errors.url ? 'border-red-500' : ''}`} placeholder="https://api.example.com/health" />
+                {errors.url && <p className="text-red-400 text-xs mt-1">{errors.url}</p>}
+              </div>
+            </div>
+            
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">HTTP Method</label>
+              <div className="flex gap-2">
+                {['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map(m => (
+                  <button key={m} onClick={() => update('method', m)} className={`px-4 py-2 rounded-lg text-sm font-mono ${formData.method === m ? 'bg-cyan-500 text-black font-bold' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+            
+            {(formData.method === 'POST' || formData.method === 'PUT' || formData.method === 'PATCH') && (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">Request Headers (JSON)</label>
+                  <textarea value={formData.requestHeaders} onChange={e => update('requestHeaders', e.target.value)} className="input-field font-mono text-sm h-16" placeholder='{"Content-Type": "application/json"}' />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">Request Body</label>
+                  <textarea value={formData.requestBody} onChange={e => update('requestBody', e.target.value)} className="input-field font-mono text-sm h-20" placeholder='{"key": "value"}' />
+                </div>
+              </div>
+            )}
+            
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Check Interval</label>
+              <div className="grid grid-cols-3 gap-2">
+                {intervals.map(o => (
+                  <button key={o.val} onClick={() => update('interval', o.val)} className={`p-3 rounded-lg border text-sm ${formData.interval === o.val ? 'border-cyan-500 bg-cyan-900 text-cyan-400' : 'border-gray-700 hover:border-gray-600'}`}>
+                    <div className="font-medium">{o.label}</div>
+                    <div className="text-xs text-gray-500">{o.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Monitoring Locations</label>
+              <div className="grid grid-cols-3 gap-2">
+                {locations.map(loc => (
+                  <button key={loc.val} onClick={() => {
+                    if (formData.locations.includes(loc.val)) {
+                      update('locations', formData.locations.filter(l => l !== loc.val));
+                    } else {
+                      update('locations', [...formData.locations, loc.val]);
+                    }
+                  }} className={`p-3 rounded-lg border text-sm ${formData.locations.includes(loc.val) ? 'border-cyan-500 bg-cyan-900 text-cyan-400' : 'border-gray-700 hover:border-gray-600'}`}>
+                    <div className="flex items-center gap-2">
+                      <span>{formData.locations.includes(loc.val) ? ICONS.check : ''}</span>
+                      <span>{loc.flag}</span>
+                      <span className="font-medium">{loc.label}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Expected Status Code</label>
+                <input type="number" value={formData.expectedStatus} onChange={e => update('expectedStatus', e.target.value)} className="input-field" />
+                <p className="text-xs text-gray-500 mt-1">Monitor is "up" when response matches</p>
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Max Response Time</label>
+                <input type="number" value={formData.maxResponse} onChange={e => update('maxResponse', e.target.value)} className="input-field" />
+                <p className="text-xs text-gray-500 mt-1">Alert if response exceeds (ms)</p>
+              </div>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">SLA Target</label>
+                <select value={formData.sla_target} onChange={e => update('sla_target', e.target.value)} className="input-field">
+                  <option value="99">99% (14.4 min downtime/day)</option>
+                  <option value="99.5">99.5% (7.2 min downtime/day)</option>
+                  <option value="99.9">99.9% (1.44 min downtime/day)</option>
+                  <option value="99.95">99.95% (43.2 sec downtime/day)</option>
+                  <option value="99.99">99.99% (4.32 sec downtime/day)</option>
+                </select>
+                <p className="text-xs text-gray-500 mt-1">Target uptime percentage</p>
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Tags</label>
+                <div className="flex flex-wrap gap-2">
+                  {['production', 'staging', 'development', 'payment', 'auth', 'api'].map(tag => (
+                    <button key={tag} onClick={() => {
+                      if (formData.tags.includes(tag)) {
+                        update('tags', formData.tags.filter(t => t !== tag));
+                      } else {
+                        update('tags', [...formData.tags, tag]);
+                      }
+                    }} className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${formData.tags.includes(tag) ? 'bg-cyan-500 text-black' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-500 mt-1">Organize and filter monitors</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 p-4 bg-gray-900 rounded-lg">
+              <input type="checkbox" id="sslCheck" checked={formData.sslCheck} onChange={e => update('sslCheck', e.target.checked)} className="w-5 h-5 rounded" />
+              <div>
+                <label htmlFor="sslCheck" className="font-medium cursor-pointer">SSL Certificate Monitoring</label>
+                <p className="text-sm text-gray-500">Get alerts when SSL certificate expires or has issues</p>
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-gray-700">
+              <button onClick={handleSubmit} disabled={loading} className="btn-primary w-full py-3 flex items-center justify-center gap-2">
+                {loading ? (
+                  <>
+                    <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin"></div>
+                    Creating Monitor...
+                  </>
+                ) : (
+                  <>
+                    {ICONS.check}
+                    Create Monitor
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    };
 
       const handleSubmit = async () => {
         if (!validate()) return;
