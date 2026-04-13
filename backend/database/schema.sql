@@ -14,10 +14,12 @@ DROP TABLE IF EXISTS users CASCADE;
 -- Drop existing types
 DROP TYPE IF EXISTS user_plan CASCADE;
 DROP TYPE IF EXISTS alert_channel CASCADE;
+DROP TYPE IF EXISTS incident_severity CASCADE;
 
 -- Create enum types
 CREATE TYPE user_plan AS ENUM ('free', 'starter', 'pro', 'enterprise');
 CREATE TYPE alert_channel AS ENUM ('email', 'sms', 'slack', 'discord', 'webhook');
+CREATE TYPE incident_severity AS ENUM ('critical', 'high', 'medium', 'low');
 
 -- ============================================
 -- USERS TABLE
@@ -37,6 +39,9 @@ CREATE TABLE users (
     quiet_hours_enabled BOOLEAN DEFAULT false,
     quiet_hours_start TIME DEFAULT '23:00',
     quiet_hours_end TIME DEFAULT '07:00',
+    is_verified BOOLEAN DEFAULT false,
+    verification_token VARCHAR(255),
+    verification_sent_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -64,6 +69,8 @@ CREATE TABLE monitors (
     status VARCHAR(20) DEFAULT 'up',
     last_check_at TIMESTAMP WITH TIME ZONE,
     avg_response INTEGER DEFAULT 0,
+    sla_target DECIMAL(5,2) DEFAULT 99.90,
+    tags TEXT[] DEFAULT '{}',
     is_active BOOLEAN DEFAULT true,
     is_paused BOOLEAN DEFAULT false,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -87,6 +94,9 @@ CREATE TABLE monitor_checks (
     tls_time_ms INTEGER,
     ttfb_ms INTEGER,
     content_transfer_ms INTEGER,
+    response_size_bytes INTEGER DEFAULT 0,
+    grade CHAR(1),
+    grade_score INTEGER,
     checked_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -97,12 +107,16 @@ CREATE TABLE incidents (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     monitor_id UUID NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
     status VARCHAR(50) DEFAULT 'investigating',
+    severity incident_severity DEFAULT 'medium',
     started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     resolved_at TIMESTAMP WITH TIME ZONE,
     duration_seconds INTEGER,
     affected_locations TEXT[],
     failure_reason TEXT,
     is_resolved BOOLEAN DEFAULT false,
+    last_followup_sent TIMESTAMP WITH TIME ZONE,
+    followup_count INTEGER DEFAULT 0,
+    notes TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -229,19 +243,90 @@ CREATE TABLE reports (
 );
 
 -- ============================================
+-- RUM EVENTS TABLE (Real User Monitoring)
+-- ============================================
+CREATE TABLE rum_events (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    monitor_id UUID NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+    load_time_ms INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    referrer TEXT,
+    user_agent TEXT,
+    country VARCHAR(50),
+    ip_address VARCHAR(45),
+    session_id VARCHAR(64),
+    timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- ============================================
+-- RUM SESSIONS TABLE (for bounce rate calculation)
+-- ============================================
+CREATE TABLE rum_sessions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    session_id VARCHAR(64) UNIQUE NOT NULL,
+    monitor_id UUID NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+    first_pageview_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    last_pageview_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    pageview_count INTEGER DEFAULT 1,
+    country VARCHAR(50),
+    ip_address VARCHAR(45)
+);
+
+-- ============================================
+-- RESPONSE HISTORY TABLE (last 5 responses per monitor)
+-- ============================================
+CREATE TABLE response_history (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    monitor_id UUID NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+    status_code INTEGER,
+    response_time_ms INTEGER,
+    response_preview TEXT,
+    is_successful BOOLEAN,
+    checked_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- ============================================
+-- SLA REPORTS TABLE
+-- ============================================
+CREATE TABLE sla_reports (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    monitor_id UUID REFERENCES monitors(id) ON DELETE SET NULL,
+    period_month DATE NOT NULL,
+    uptime_percentage DECIMAL(5,2),
+    total_checks INTEGER,
+    successful_checks INTEGER,
+    failed_checks INTEGER,
+    total_downtime_seconds INTEGER,
+    sla_met BOOLEAN,
+    generated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(monitor_id, period_month)
+);
+
+-- ============================================
 -- INDEXES (for query performance)
 -- ============================================
 CREATE INDEX idx_monitors_user_id ON monitors(user_id);
 CREATE INDEX idx_monitors_is_active ON monitors(is_active);
+CREATE INDEX idx_monitors_tags ON monitors USING GIN(tags);
 CREATE INDEX idx_monitor_checks_monitor_id ON monitor_checks(monitor_id);
 CREATE INDEX idx_monitor_checks_checked_at ON monitor_checks(checked_at);
 CREATE INDEX idx_monitor_checks_location ON monitor_checks(location);
 CREATE INDEX idx_incidents_monitor_id ON incidents(monitor_id);
 CREATE INDEX idx_incidents_is_resolved ON incidents(is_resolved);
+CREATE INDEX idx_incidents_started_at ON incidents(started_at);
 CREATE INDEX idx_alert_contacts_monitor_id ON alert_contacts(monitor_id);
 CREATE INDEX idx_status_pages_user_id ON status_pages(user_id);
 CREATE INDEX idx_subscribers_status_page_id ON subscribers(status_page_id);
 CREATE INDEX idx_api_keys_user_id ON api_keys(user_id);
+CREATE INDEX idx_rum_events_monitor_id ON rum_events(monitor_id);
+CREATE INDEX idx_rum_events_timestamp ON rum_events(timestamp);
+CREATE INDEX idx_rum_events_session_id ON rum_events(session_id);
+CREATE INDEX idx_rum_sessions_monitor_id ON rum_sessions(monitor_id);
+CREATE INDEX idx_rum_sessions_last_pageview ON rum_sessions(last_pageview_at);
+CREATE INDEX idx_response_history_monitor_id ON response_history(monitor_id);
+CREATE INDEX idx_sla_reports_user_id ON sla_reports(user_id);
+CREATE INDEX idx_sla_reports_period ON sla_reports(period_month);
 
 -- ============================================
 -- TRIGGER for updated_at auto-update

@@ -226,12 +226,24 @@ router.get('/public/:slug', async (req, res) => {
             `SELECT m.id, m.name, m.url,
                     (SELECT is_successful FROM monitor_checks WHERE monitor_id = m.id ORDER BY checked_at DESC LIMIT 1) as last_status,
                     (SELECT response_time_ms FROM monitor_checks WHERE monitor_id = m.id ORDER BY checked_at DESC LIMIT 1) as last_response,
+                    (SELECT checked_at FROM monitor_checks WHERE monitor_id = m.id ORDER BY checked_at DESC LIMIT 1) as last_checked_at,
                     (SELECT COUNT(*) FROM monitor_checks WHERE monitor_id = m.id AND checked_at > NOW() - INTERVAL '90 days' AND is_successful = true) as uptime_checks,
-                    (SELECT COUNT(*) FROM monitor_checks WHERE monitor_id = m.id AND checked_at > NOW() - INTERVAL '90 days') as total_checks
+                    (SELECT COUNT(*) FROM monitor_checks WHERE monitor_id = m.id AND checked_at > NOW() - INTERVAL '90 days') as total_checks,
+                    (SELECT json_agg(json_build_object('time', time_bucket('30 minutes', timestamp), 'avg', AVG(load_time_ms)::int, 'count', COUNT(*)) ORDER BY time_bucket('30 minutes', timestamp))
+                     FROM rum_events WHERE monitor_id = m.id AND timestamp > NOW() - INTERVAL '24 hours') as rum_timeseries
              FROM status_page_monitors spm
              JOIN monitors m ON spm.monitor_id = m.id
              WHERE spm.status_page_id = $1`,
             [page.id]
+        );
+
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+        const activeVisitorsResult = await query(
+            `SELECT COUNT(DISTINCT session_id) as active_visitors
+             FROM rum_sessions rs
+             JOIN status_page_monitors spm ON rs.monitor_id = spm.monitor_id
+             WHERE spm.status_page_id = $1 AND rs.last_pageview_at >= $2`,
+            [page.id, fiveMinutesAgo]
         );
 
         const incidentsResult = page.show_incident_history ? await query(
@@ -245,16 +257,20 @@ router.get('/public/:slug', async (req, res) => {
         ) : { rows: [] };
 
         const overallStatus = monitorsResult.rows.some(m => m.last_status === false) ? 'partial' : 'operational';
+        const activeVisitors = activeVisitorsResult.rows[0]?.active_visitors || 0;
 
         res.json({
             name: page.name,
             brandColor: page.brand_color,
             status: overallStatus,
+            activeVisitors,
             monitors: monitorsResult.rows.map(m => ({
                 name: m.name,
                 status: m.last_status === false ? 'down' : 'up',
                 responseTime: page.show_response_times ? m.last_response : null,
-                uptime: m.total_checks > 0 ? Math.round((m.uptime_checks / m.total_checks) * 10000) / 100 : 100
+                uptime: m.total_checks > 0 ? Math.round((m.uptime_checks / m.total_checks) * 10000) / 100 : 100,
+                lastCheckedAt: m.last_checked_at,
+                rumTimeseries: m.rum_timeseries || []
             })),
             incidents: incidentsResult.rows,
             updatedAt: new Date().toISOString()

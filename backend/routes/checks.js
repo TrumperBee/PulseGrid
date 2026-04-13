@@ -36,7 +36,14 @@ router.get('/monitor/:monitorId', async (req, res) => {
                 responseTime: c.response_time_ms,
                 isSuccessful: c.is_successful,
                 error: c.error_message,
-                checkedAt: c.checked_at
+                checkedAt: c.checked_at,
+                grade: c.grade,
+                gradeScore: c.grade_score,
+                dnsTime: c.dns_time_ms,
+                connectTime: c.connect_time_ms,
+                tlsTime: c.tls_time_ms,
+                ttfb: c.ttfb_ms,
+                responseSize: c.response_size_bytes
             }))
         });
     } catch (error) {
@@ -68,7 +75,14 @@ router.get('/', async (req, res) => {
                 responseTime: c.response_time_ms,
                 isSuccessful: c.is_successful,
                 error: c.error_message,
-                checkedAt: c.checked_at
+                checkedAt: c.checked_at,
+                grade: c.grade,
+                gradeScore: c.grade_score,
+                dnsTime: c.dns_time_ms,
+                connectTime: c.connect_time_ms,
+                tlsTime: c.tls_time_ms,
+                ttfb: c.ttfb_ms,
+                responseSize: c.response_size_bytes
             }))
         });
     } catch (error) {

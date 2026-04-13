@@ -10,11 +10,22 @@ router.use(authMiddleware);
 // GET /api/monitors - Get all monitors for user
 router.get('/', async (req, res, next) => {
     try {
+        const { tag } = req.query;
+        
+        let whereClause = 'WHERE m.user_id = $1';
+        const params = [req.user.userId];
+        
+        if (tag) {
+            whereClause += ' AND $2 = ANY(m.tags)';
+            params.push(tag);
+        }
+
         const result = await query(`
             SELECT 
                 m.id, m.name, m.url, m.method, m.status, m.is_paused, m.is_active,
                 m.interval_seconds, m.timeout_seconds, m.locations,
                 m.expected_status_code, m.response_must_contain, m.max_response_ms,
+                m.sla_target, m.tags,
                 m.created_at, m.updated_at,
                 (
                     SELECT json_build_object(
@@ -22,7 +33,14 @@ router.get('/', async (req, res, next) => {
                         'response_time_ms', mc.response_time_ms,
                         'is_successful', mc.is_successful,
                         'error_message', mc.error_message,
-                        'checked_at', mc.checked_at
+                        'checked_at', mc.checked_at,
+                        'grade', mc.grade,
+                        'grade_score', mc.grade_score,
+                        'dns_time_ms', mc.dns_time_ms,
+                        'connect_time_ms', mc.connect_time_ms,
+                        'tls_time_ms', mc.tls_time_ms,
+                        'ttfb_ms', mc.ttfb_ms,
+                        'response_size_bytes', mc.response_size_bytes
                     )
                     FROM monitor_checks mc
                     WHERE mc.monitor_id = m.id
@@ -36,11 +54,27 @@ router.get('/', async (req, res, next) => {
                     AND i.created_at > NOW() - INTERVAL '30 days'
                 ) as incident_count_30d
             FROM monitors m
-            WHERE m.user_id = $1
+            ${whereClause}
             ORDER BY m.created_at DESC
-        `, [req.user.userId]);
+        `, params);
 
         res.json({ monitors: result.rows });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// GET /api/monitors/tags - Get all unique tags for user
+router.get('/tags', async (req, res, next) => {
+    try {
+        const result = await query(`
+            SELECT DISTINCT unnest(tags) as tag
+            FROM monitors
+            WHERE user_id = $1 AND array_length(tags, 1) > 0
+            ORDER BY tag
+        `, [req.user.userId]);
+
+        res.json({ tags: result.rows.map(r => r.tag) });
     } catch (error) {
         next(error);
     }
@@ -55,7 +89,7 @@ router.post('/', async (req, res, next) => {
             interval_seconds = 300, timeout_seconds = 30,
             locations = ['nairobi'], expected_status_code = 200,
             response_must_contain, response_must_not_contain,
-            max_response_ms = 3000
+            max_response_ms = 3000, sla_target = 99.90, tags = []
         } = req.body;
 
         // Validate required fields
@@ -89,20 +123,21 @@ router.post('/', async (req, res, next) => {
         // Insert monitor
         const headersJson = typeof headers === 'string' ? headers : JSON.stringify(headers);
         const locationsArr = Array.isArray(locations) ? locations : [locations];
+        const tagsArr = Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim()).filter(Boolean);
 
         const result = await query(`
             INSERT INTO monitors (
                 user_id, name, url, method, headers, body,
                 auth_type, auth_value, interval_seconds, timeout_seconds,
                 locations, expected_status_code, response_must_contain,
-                response_must_not_contain, max_response_ms
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                response_must_not_contain, max_response_ms, sla_target, tags
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             RETURNING *
         `, [
             req.user.userId, name, url, method, headersJson, body,
             auth_type, auth_value, interval_seconds, timeout_seconds,
             locationsArr, expected_status_code, response_must_contain,
-            response_must_not_contain, max_response_ms
+            response_must_not_contain, max_response_ms, sla_target, tagsArr
         ]);
 
         const monitor = result.rows[0];
@@ -169,10 +204,12 @@ router.put('/:id', async (req, res, next) => {
             name, url, method, headers, body,
             auth_type, auth_value, interval_seconds, timeout_seconds,
             locations, expected_status_code, response_must_contain,
-            response_must_not_contain, max_response_ms, is_active
+            response_must_not_contain, max_response_ms, is_active,
+            sla_target, tags
         } = req.body;
 
         const headersJson = headers ? (typeof headers === 'string' ? headers : JSON.stringify(headers)) : null;
+        const tagsArr = tags ? (Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim()).filter(Boolean)) : null;
 
         const result = await query(`
             UPDATE monitors SET
@@ -191,14 +228,17 @@ router.put('/:id', async (req, res, next) => {
                 response_must_not_contain = COALESCE($13, response_must_not_contain),
                 max_response_ms = COALESCE($14, max_response_ms),
                 is_active = COALESCE($15, is_active),
+                sla_target = COALESCE($16, sla_target),
+                tags = COALESCE($17, tags),
                 updated_at = NOW()
-            WHERE id = $16 AND user_id = $17
+            WHERE id = $18 AND user_id = $19
             RETURNING *
         `, [
             name, url, method, headersJson, body,
             auth_type, auth_value, interval_seconds, timeout_seconds,
             locations, expected_status_code, response_must_contain,
             response_must_not_contain, max_response_ms, is_active,
+            sla_target, tagsArr,
             req.params.id, req.user.userId
         ]);
 
@@ -258,6 +298,10 @@ router.post('/:id/test', async (req, res, next) => {
             dns_time_ms: checkResult.dnsTime,
             connect_time_ms: checkResult.connectTime,
             tls_time_ms: checkResult.tlsTime,
+            ttfb_ms: checkResult.ttfb,
+            grade: checkResult.grade,
+            grade_score: checkResult.gradeScore,
+            response_size_bytes: checkResult.responseSize,
             checked_at: checkResult.checkedAt
         });
     } catch (error) {
@@ -298,6 +342,192 @@ router.post('/:id/resume', async (req, res, next) => {
         }
 
         res.json({ message: 'Monitor resumed', monitor: result.rows[0] });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// GET /api/monitors/:id/sla - Get SLA stats for monitor
+router.get('/:id/sla', async (req, res, next) => {
+    try {
+        const monitorResult = await query(
+            'SELECT sla_target FROM monitors WHERE id = $1 AND user_id = $2',
+            [req.params.id, req.user.userId]
+        );
+
+        if (monitorResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Monitor not found' });
+        }
+
+        const slaTarget = parseFloat(monitorResult.rows[0].sla_target) || 99.90;
+
+        const statsResult = await query(`
+            SELECT 
+                COUNT(*)::int as total_checks,
+                COUNT(*) FILTER (WHERE is_successful = true)::int as successful_checks,
+                COUNT(*) FILTER (WHERE is_successful = false)::int as failed_checks
+            FROM monitor_checks
+            WHERE monitor_id = $1
+            AND checked_at >= DATE_TRUNC('month', NOW())
+        `, [req.params.id]);
+
+        const currentMonth = new Date();
+        const daysInMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
+        const currentDay = currentMonth.getDate();
+        const totalMinutesInMonth = daysInMonth * 24 * 60;
+        const elapsedMinutes = currentDay * 24 * 60;
+
+        const stats = statsResult.rows[0];
+        const uptimePercentage = stats.total_checks > 0 
+            ? ((stats.successful_checks / stats.total_checks) * 100).toFixed(2) 
+            : 100;
+
+        const slaMinutes = (slaTarget / 100) * elapsedMinutes;
+        const usedMinutes = (parseFloat(uptimePercentage) / 100) * elapsedMinutes;
+        const allowedDowntime = totalMinutesInMonth - slaMinutes;
+        const downtimeUsed = elapsedMinutes - usedMinutes;
+        const downtimeRemaining = allowedDowntime - downtimeUsed;
+
+        const slaMet = parseFloat(uptimePercentage) >= slaTarget;
+
+        const formatMinutes = (mins) => {
+            const hours = Math.floor(mins / 60);
+            const minutes = Math.round(mins % 60);
+            return `${hours}h ${minutes}m`;
+        };
+
+        res.json({
+            sla_target: slaTarget,
+            current_month_uptime: parseFloat(uptimePercentage),
+            sla_met: slaMet,
+            total_checks: stats.total_checks,
+            successful_checks: stats.successful_checks,
+            failed_checks: stats.failed_checks,
+            downtime_used_seconds: Math.round(downtimeUsed * 60),
+            downtime_remaining_seconds: Math.round(downtimeRemaining * 60),
+            downtime_used_formatted: formatMinutes(downtimeUsed),
+            downtime_remaining_formatted: formatMinutes(Math.max(0, downtimeRemaining)),
+            allowed_downtime_formatted: formatMinutes(allowedDowntime)
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// POST /api/monitors/bulk - Bulk actions
+router.post('/bulk', async (req, res, next) => {
+    try {
+        const { ids, action } = req.body;
+
+        if (!ids || !Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ error: 'Monitor IDs are required' });
+        }
+
+        if (!['pause', 'resume', 'delete'].includes(action)) {
+            return res.status(400).json({ error: 'Invalid action. Use: pause, resume, delete' });
+        }
+
+        const idsParam = ids.join(',');
+        let result;
+
+        switch (action) {
+            case 'pause':
+                result = await query(`
+                    UPDATE monitors SET is_paused = true, updated_at = NOW()
+                    WHERE id = ANY($1) AND user_id = $2
+                    RETURNING id
+                `, [ids, req.user.userId]);
+                break;
+            case 'resume':
+                result = await query(`
+                    UPDATE monitors SET is_paused = false, updated_at = NOW()
+                    WHERE id = ANY($1) AND user_id = $2
+                    RETURNING id
+                `, [ids, req.user.userId]);
+                break;
+            case 'delete':
+                result = await query(`
+                    DELETE FROM monitors WHERE id = ANY($1) AND user_id = $2 RETURNING id
+                `, [ids, req.user.userId]);
+                break;
+        }
+
+        res.json({
+            message: `Successfully ${action}ed ${result.rows.length} monitors`,
+            affected: result.rows.length
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// GET /api/monitors/:id/response-history - Get response history
+router.get('/:id/response-history', async (req, res, next) => {
+    try {
+        const monitorResult = await query(
+            'SELECT id FROM monitors WHERE id = $1 AND user_id = $2',
+            [req.params.id, req.user.userId]
+        );
+
+        if (monitorResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Monitor not found' });
+        }
+
+        const result = await query(`
+            SELECT 
+                id,
+                status_code,
+                response_time_ms,
+                response_preview,
+                is_successful,
+                checked_at
+            FROM monitor_checks
+            WHERE monitor_id = $1
+            ORDER BY checked_at DESC
+            LIMIT 10
+        `, [req.params.id]);
+
+        res.json({
+            history: result.rows
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// GET /api/monitors/:id/sla-history - Get SLA history
+router.get('/:id/sla-history', async (req, res, next) => {
+    try {
+        const monitorResult = await query(
+            'SELECT id, sla_target FROM monitors WHERE id = $1 AND user_id = $2',
+            [req.params.id, req.user.userId]
+        );
+
+        if (monitorResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Monitor not found' });
+        }
+
+        const result = await query(`
+            SELECT 
+                DATE_TRUNC('month', checked_at) as month,
+                COUNT(*)::int as total_checks,
+                COUNT(*) FILTER (WHERE is_successful = true)::int as successful_checks,
+                ROUND(
+                    COUNT(*) FILTER (WHERE is_successful = true)::NUMERIC / 
+                    NULLIF(COUNT(*), 0) * 100, 
+                    2
+                ) as uptime_percentage
+            FROM monitor_checks
+            WHERE monitor_id = $1
+            AND checked_at >= NOW() - INTERVAL '12 months'
+            GROUP BY DATE_TRUNC('month', checked_at)
+            ORDER BY month DESC
+        `, [req.params.id]);
+
+        res.json({
+            sla_target: monitorResult.rows[0].sla_target,
+            history: result.rows
+        });
     } catch (error) {
         next(error);
     }

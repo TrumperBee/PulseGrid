@@ -47,7 +47,8 @@ app.get('/api', (req, res) => {
             statusPages: '/api/status-pages',
             alerts: '/api/alerts',
             users: '/api/users',
-            reports: '/api/reports'
+            reports: '/api/reports',
+            rum: '/api/rum'
         }
     });
 });
@@ -63,6 +64,7 @@ app.use('/api/alerts', require('./routes/alerts'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/reports', require('./routes/reports'));
 app.use('/api/webhooks', require('./routes/webhooks'));
+app.use('/api/rum', require('./routes/rum'));
 
 app.use((req, res) => {
     res.status(404).json({ 

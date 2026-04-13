@@ -17,11 +17,13 @@ router.get('/', async (req, res, next) => {
                 m.name as monitor_name,
                 m.url as monitor_url,
                 i.status,
+                i.severity,
                 i.started_at,
                 i.resolved_at,
                 i.duration_seconds,
                 i.failure_reason,
                 i.affected_locations,
+                i.notes,
                 i.created_at
             FROM incidents i
             JOIN monitors m ON m.id = i.monitor_id
@@ -52,11 +54,13 @@ router.get('/', async (req, res, next) => {
                 monitor_name: i.monitor_name,
                 monitor_url: i.monitor_url,
                 status: i.resolved_at ? 'resolved' : 'ongoing',
+                severity: i.severity,
                 started_at: i.started_at,
                 resolved_at: i.resolved_at,
                 duration_seconds: i.duration_seconds,
                 failure_reason: i.failure_reason,
                 affected_locations: i.affected_locations,
+                notes: i.notes,
                 is_resolved: i.resolved_at !== null
             }))
         });
@@ -116,15 +120,44 @@ router.get('/:id', async (req, res, next) => {
                 monitor_name: incident.monitor_name,
                 monitor_url: incident.monitor_url,
                 status: incident.resolved_at ? 'resolved' : 'ongoing',
+                severity: incident.severity,
                 started_at: incident.started_at,
                 resolved_at: incident.resolved_at,
                 duration_seconds: incident.duration_seconds,
                 failure_reason: incident.failure_reason,
                 affected_locations: incident.affected_locations,
+                notes: incident.notes,
                 is_resolved: incident.resolved_at !== null,
                 created_at: incident.created_at
             },
             related_checks: checksResult.rows
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// PUT /api/incidents/:id - Update incident notes
+router.put('/:id', async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { notes } = req.body;
+
+        const result = await query(`
+            UPDATE incidents i
+            SET notes = $1
+            FROM monitors m
+            WHERE i.id = $2 AND i.monitor_id = m.id AND m.user_id = $3
+            RETURNING i.*
+        `, [notes, id, req.user.userId]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Incident not found' });
+        }
+
+        res.json({
+            message: 'Incident updated',
+            incident: result.rows[0]
         });
     } catch (error) {
         next(error);

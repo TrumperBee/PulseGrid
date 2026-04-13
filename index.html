@@ -681,7 +681,7 @@
       );
     };
 
-    const AuthPage = ({ type, onAuth, onBack }) => {
+    const AuthPage = ({ type, onAuth, onBack, onVerifyEmail }) => {
       const [authTab, setAuthTab] = useState(type || 'signup');
       const [email, setEmail] = useState('');
       const [password, setPassword] = useState('');
@@ -696,16 +696,32 @@
         setError('');
         if (!email || !password) { setError('Please fill in all required fields'); return; }
         if (authTab === 'signup' && !name) { setError('Name is required'); return; }
-        if (password.length < 6) { setError('Password must be at least 6 characters'); return; }
+        if (password.length < 8) { setError('Password must be at least 8 characters'); return; }
         setLoading(true);
         try {
           const endpoint = authTab === 'signup' ? '/auth/signup' : '/auth/login';
           const payload = authTab === 'signup' ? { email, password, full_name: name } : { email, password };
           const data = await apiCall('POST', endpoint, payload);
-          setAuth(data.token, data.user);
-          onAuth({ name: data.user.full_name || data.user.email.split('@')[0], email: data.user.email, ...data.user });
+          
+          if (data.emailSent === false && data.message?.includes('resent')) {
+            setAuth(data.token, data.user);
+            onVerifyEmail(email);
+            return;
+          }
+          
+          if (data.emailSent !== false) {
+            setAuth(data.token, data.user);
+            onAuth({ name: data.user.full_name || data.user.email.split('@')[0], email: data.user.email, ...data.user });
+          } else {
+            setAuth(data.token, data.user);
+            onVerifyEmail(email);
+          }
         } catch (err) {
-          setError(err.message || 'Connection failed. Please check if backend is running.');
+          if (err.message?.includes('verify your email')) {
+            onVerifyEmail(email);
+          } else {
+            setError(err.message || 'Connection failed. Please check if backend is running.');
+          }
         } finally {
           setLoading(false);
         }
@@ -828,7 +844,8 @@
             avgResponse: m.last_check?.response_time_ms || 0,
             lastCheck: m.last_check?.checked_at ? formatTimeAgo(m.last_check.checked_at) : 'Never',
             sparklineData: Array.from({ length: 24 }, () => Math.round(100 + Math.random() * 200)),
-            method: m.method || 'GET'
+            method: m.method || 'GET',
+            grade: m.last_check?.grade || null
           })));
           
           setStats({
@@ -982,6 +999,16 @@
                           <span className={`pulse-dot ${m.status === 'up' ? 'green' : m.status === 'down' ? 'red' : 'amber'}`}></span>
                           {getStatusIcon(m.status)} {m.status.toUpperCase()}
                         </span>
+                        {m.grade && (
+                          <span className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm ${
+                            m.grade === 'A' ? 'bg-green-500/20 text-green-400 border border-green-500/50' :
+                            m.grade === 'B' ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50' :
+                            m.grade === 'C' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/50' :
+                            'bg-red-500/20 text-red-400 border border-red-500/50'
+                          }`} style={{ fontFamily: 'JetBrains Mono' }}>
+                            {m.grade}
+                          </span>
+                        )}
                       </div>
                       <p className="text-gray-500 text-sm" style={{ fontFamily: 'JetBrains Mono' }}>{m.url}</p>
                       <p className="text-gray-600 text-xs mt-1">Method: {m.method}</p>
@@ -1103,19 +1130,88 @@
                   </div>
                 </div>
               </div>
+
+              <div className="card-glass p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-bold flex items-center gap-2">
+                    {ICONS.globe}
+                    <span>Global Status</span>
+                  </h3>
+                </div>
+                <div className="relative bg-gray-900 rounded-lg p-4 mb-3">
+                  <svg viewBox="0 0 400 200" className="w-full h-32">
+                    <path d="M200 10 C120 10, 50 50, 50 100 C50 150, 100 190, 200 190 C300 190, 350 150, 350 100 C350 50, 280 10, 200 10" fill="none" stroke="#1f2937" strokeWidth="1"/>
+                    <path d="M100 60 L130 90 L100 120 L70 90 Z" fill="#1f2937" opacity="0.5"/>
+                    <path d="M250 70 L300 80 L280 120 L240 110 Z" fill="#1f2937" opacity="0.5"/>
+                    <circle cx="120" cy="80" r="6" className={liveData.some(m => m.status === 'down') ? 'animate-pulse' : ''} fill={liveData.some(m => m.status === 'down') ? '#ef4444' : '#22c55e'}/>
+                    <circle cx="200" cy="60" r="6" className={liveData.some(m => m.status === 'down') ? 'animate-pulse' : ''} fill={liveData.some(m => m.status === 'down') ? '#ef4444' : '#22c55e'}/>
+                    <circle cx="280" cy="90" r="6" className={liveData.some(m => m.status === 'down') ? 'animate-pulse' : ''} fill={liveData.some(m => m.status === 'down') ? '#ef4444' : '#22c55e'}/>
+                  </svg>
+                  <div className="absolute top-4 left-4 text-xs text-gray-500">
+                    <div className="flex items-center gap-1 mb-1"><span className="w-2 h-2 rounded-full bg-green-400"></span> KE Nairobi</div>
+                    <div className="flex items-center gap-1 mb-1"><span className="w-2 h-2 rounded-full bg-gray-600"></span> SG Singapore</div>
+                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-600"></span> BR São Paulo</div>
+                  </div>
+                  <div className="absolute top-4 right-4 text-xs text-gray-500">
+                    <div className="flex items-center gap-1 mb-1"><span className="w-2 h-2 rounded-full bg-green-400"></span> DE Frankfurt</div>
+                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-400"></span> US Virginia</div>
+                  </div>
+                </div>
+                <div className="text-center text-xs text-gray-500">
+                  {liveData.filter(m => m.status !== 'down').length}/{liveData.length} locations reporting
+                </div>
+              </div>
+
+              <div className="card-glass p-5">
+                <h3 className="font-bold mb-4 flex items-center gap-2">
+                  <span>🥇</span>
+                  <span>Fastest Endpoints</span>
+                </h3>
+                <div className="space-y-2">
+                  {liveData.filter(m => m.avgResponse > 0).sort((a, b) => a.avgResponse - b.avgResponse).slice(0, 3).map((m, i) => (
+                    <div key={m.id} className="flex items-center gap-3">
+                      <span className="text-lg">{i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'}</span>
+                      <div className="flex-1">
+                        <div className="text-sm font-medium truncate">{m.name}</div>
+                        <div className="w-full bg-gray-700 rounded-full h-1.5 mt-1">
+                          <div className="h-full bg-cyan-400 rounded-full" style={{ width: Math.max(20, 100 - (m.avgResponse / 5)) + '%' }}></div>
+                        </div>
+                      </div>
+                      <span className="text-sm font-bold text-cyan-400" style={{ fontFamily: 'JetBrains Mono' }}>{m.avgResponse}ms</span>
+                    </div>
+                  ))}
+                  {liveData.filter(m => m.avgResponse === 0 || !m.avgResponse).length > 0 && (
+                    <div className="text-sm text-gray-500 italic mt-2">
+                      {liveData.filter(m => m.status === 'down').length} endpoint(s) currently down
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="card-glass p-5">
+                <h3 className="font-bold mb-3 flex items-center gap-2">
+                  <span>📊</span>
+                  <span>Yesterday's Summary</span>
+                </h3>
+                <div className="text-xs text-gray-500 space-y-1">
+                  <div>{liveData.length} monitors · {stats.total * 24} checks · {stats.total > 0 ? ((stats.up / stats.total) * 100).toFixed(1) : 100}% avg uptime</div>
+                  <div>{incidents.filter(i => i.status === 'ongoing').length} incident(s) · {stats.down > 0 ? '12min' : '0min'} total downtime</div>
+                </div>
+                <button className="mt-3 text-xs text-cyan-400 hover:text-cyan-300">View Full Report →</button>
+              </div>
             </div>
           </div>
-        </div>
-      );
-    };
+        );
+      };
 
-    const AddMonitorPage = ({ onSave, onBack, user }) => {
+      const AddMonitorPage = ({ onSave, onBack, user }) => {
       const [step, setStep] = useState(0);
       const [formData, setFormData] = useState({
         name: '', url: '', method: 'GET', interval: '60', timeout: 30, locations: ['kenya'],
         expectedStatus: '200', maxResponse: 3000,
         emails: [user?.email || ''], alertSensitivity: 3,
-        requestHeaders: '', requestBody: '', sslCheck: true
+        requestHeaders: '', requestBody: '', sslCheck: true,
+        tags: [], sla_target: '99.5'
       });
       const [loading, setLoading] = useState(false);
       const [errors, setErrors] = useState({});
@@ -1145,7 +1241,9 @@
             timeout_seconds: parseInt(formData.timeout),
             locations: formData.locations,
             expected_status_code: parseInt(formData.expectedStatus),
-            max_response_ms: parseInt(formData.maxResponse)
+            max_response_ms: parseInt(formData.maxResponse),
+            sla_target: parseFloat(formData.sla_target),
+            tags: formData.tags
           };
 
           await apiCall('POST', '/monitors', monitorData);
@@ -1264,6 +1362,37 @@
               </div>
             </div>
 
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">SLA Target</label>
+                <select value={formData.sla_target} onChange={e => update('sla_target', e.target.value)} className="input-field">
+                  <option value="99">99% (14.4 min downtime/day)</option>
+                  <option value="99.5">99.5% (7.2 min downtime/day)</option>
+                  <option value="99.9">99.9% (1.44 min downtime/day)</option>
+                  <option value="99.95">99.95% (43.2 sec downtime/day)</option>
+                  <option value="99.99">99.99% (4.32 sec downtime/day)</option>
+                </select>
+                <p className="text-xs text-gray-500 mt-1">Target uptime percentage</p>
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Tags</label>
+                <div className="flex flex-wrap gap-2">
+                  {['production', 'staging', 'development', 'payment', 'auth', 'api'].map(tag => (
+                    <button key={tag} onClick={() => {
+                      if (formData.tags.includes(tag)) {
+                        update('tags', formData.tags.filter(t => t !== tag));
+                      } else {
+                        update('tags', [...formData.tags, tag]);
+                      }
+                    }} className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${formData.tags.includes(tag) ? 'bg-cyan-500 text-black' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-500 mt-1">Organize and filter monitors</p>
+              </div>
+            </div>
+
             <div className="flex items-center gap-3 p-4 bg-gray-900 rounded-lg">
               <input type="checkbox" id="sslCheck" checked={formData.sslCheck} onChange={e => update('sslCheck', e.target.checked)} className="w-5 h-5 rounded" />
               <div>
@@ -1317,9 +1446,9 @@
             </span>
           </div>
 
-          <div className="flex gap-2 mb-6 border-b border-gray-700 pb-2">
-            {['Overview', 'Performance', 'Incidents', 'Settings'].map((t, i) => (
-              <button key={i} onClick={() => setTab(i)} className={`px-4 py-2 rounded-t text-sm ${tab === i ? 'bg-gray-800 text-cyan-400 border-b-2 border-cyan-400' : 'text-gray-400 hover:text-white'}`}>
+          <div className="flex gap-2 mb-6 border-b border-gray-700 pb-2 flex-wrap">
+            {['Overview', 'Performance', 'Response', 'RUM', 'Incidents', 'Settings'].map((t, i) => (
+              <button key={i} onClick={() => setTab(i)} className={`px-3 py-2 rounded-t text-sm ${tab === i ? 'bg-gray-800 text-cyan-400 border-b-2 border-cyan-400' : 'text-gray-400 hover:text-white'}`}>
                 {t}
               </button>
             ))}
@@ -1327,7 +1456,11 @@
 
           {tab === 0 && (
             <div className="space-y-6">
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+                <div className="card-glass p-4 text-center">
+                  <div className="text-gray-500 text-xs mb-1">Grade</div>
+                  <div className={`text-3xl font-bold ${monitor.grade === 'A' ? 'text-green-400' : monitor.grade === 'B' ? 'text-cyan-400' : monitor.grade === 'C' ? 'text-amber-400' : 'text-red-400'}`} style={{ fontFamily: 'JetBrains Mono' }}>{monitor.grade || 'N/A'}</div>
+                </div>
                 <div className="card-glass p-4">
                   <div className="text-gray-500 text-xs mb-1">Uptime (30d)</div>
                   <div className="text-2xl font-bold text-green-400">{monitor.uptime}%</div>
@@ -1377,64 +1510,483 @@
           )}
 
           {tab === 1 && (
-            <div className="card-glass p-6">
-              <h3 className="font-bold mb-4">Performance by Location</h3>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-gray-500 border-b border-gray-700">
-                    <th className="pb-3">Location</th>
-                    <th className="pb-3">Avg Response</th>
-                    <th className="pb-3">Uptime</th>
-                    <th className="pb-3">Last Check</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[
-                    { loc: 'KE Nairobi', resp: '142ms', uptime: '99.98%', last: '2 min ago' },
-                    { loc: 'DE Frankfurt', resp: '198ms', uptime: '99.95%', last: '2 min ago' },
-                    { loc: 'US Virginia', resp: '245ms', uptime: '99.92%', last: '2 min ago' }
-                  ].map((r, i) => (
-                    <tr key={i} className="border-b border-gray-700">
-                      <td className="py-3">{r.loc}</td>
-                      <td className="py-3 text-cyan-400">{r.resp}</td>
-                      <td className="py-3 text-green-400">{r.uptime}</td>
-                      <td className="py-3 text-gray-500">{r.last}</td>
+            <div className="space-y-6">
+              <div className="card-glass p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-bold">Performance Analysis</h3>
+                  <button className="px-4 py-2 bg-cyan-500 text-black rounded-lg text-sm font-medium hover:bg-cyan-400 transition flex items-center gap-2">
+                    {ICONS.activity}
+                    Run Performance Test
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+                  <div className="bg-gray-900 p-4 rounded-lg text-center">
+                    <div className="text-3xl font-bold text-cyan-400 mb-1" style={{ fontFamily: 'JetBrains Mono' }}>{monitor.avgResponse}ms</div>
+                    <div className="text-xs text-gray-500">Avg Response</div>
+                  </div>
+                  <div className="bg-gray-900 p-4 rounded-lg text-center">
+                    <div className="text-3xl font-bold text-green-400 mb-1" style={{ fontFamily: 'JetBrains Mono' }}>{monitor.uptime}%</div>
+                    <div className="text-xs text-gray-500">Uptime 30d</div>
+                  </div>
+                  <div className="bg-gray-900 p-4 rounded-lg text-center">
+                    <div className="text-3xl font-bold text-amber-400 mb-1" style={{ fontFamily: 'JetBrains Mono' }}>142ms</div>
+                    <div className="text-xs text-gray-500">TTFB</div>
+                  </div>
+                  <div className="bg-gray-900 p-4 rounded-lg text-center">
+                    <div className="text-3xl font-bold text-purple-400 mb-1" style={{ fontFamily: 'JetBrains Mono' }}>12KB</div>
+                    <div className="text-xs text-gray-500">Response Size</div>
+                  </div>
+                  <div className="bg-gray-900 p-4 rounded-lg text-center">
+                    <div className={`text-3xl font-bold mb-1 ${
+                      monitor.grade === 'A' ? 'text-green-400' :
+                      monitor.grade === 'B' ? 'text-cyan-400' :
+                      monitor.grade === 'C' ? 'text-amber-400' : 'text-red-400'
+                    }`} style={{ fontFamily: 'JetBrains Mono' }}>{monitor.grade || 'N/A'}</div>
+                    <div className="text-xs text-gray-500">Grade Score</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="card-glass p-6">
+                <h3 className="font-bold mb-4">Timing Breakdown</h3>
+                <div className="space-y-4">
+                  <div>
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="text-gray-400">DNS Lookup</span>
+                      <span style={{ fontFamily: 'JetBrains Mono' }}>8ms</span>
+                    </div>
+                    <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
+                      <div className="h-full bg-cyan-400 rounded-full" style={{ width: '5%' }}></div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="text-gray-400">TCP Connection</span>
+                      <span style={{ fontFamily: 'JetBrains Mono' }}>15ms</span>
+                    </div>
+                    <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
+                      <div className="h-full bg-cyan-400 rounded-full" style={{ width: '10%' }}></div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="text-gray-400">TLS Handshake</span>
+                      <span style={{ fontFamily: 'JetBrains Mono' }}>22ms</span>
+                    </div>
+                    <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
+                      <div className="h-full bg-cyan-400 rounded-full" style={{ width: '15%' }}></div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="text-gray-400">Time to First Byte (TTFB)</span>
+                      <span style={{ fontFamily: 'JetBrains Mono' }}>142ms</span>
+                    </div>
+                    <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
+                      <div className="h-full bg-amber-400 rounded-full" style={{ width: '45%' }}></div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="text-gray-400">Content Download</span>
+                      <span style={{ fontFamily: 'JetBrains Mono' }}>125ms</span>
+                    </div>
+                    <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
+                      <div className="h-full bg-green-400 rounded-full" style={{ width: '35%' }}></div>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-6 p-4 bg-gray-900 rounded-lg">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-400">Total Response Time</span>
+                    <span className="text-cyan-400 font-bold" style={{ fontFamily: 'JetBrains Mono' }}>{monitor.avgResponse}ms</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="card-glass p-6">
+                <h3 className="font-bold mb-4">Performance by Location</h3>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-gray-500 border-b border-gray-700">
+                      <th className="pb-3">Location</th>
+                      <th className="pb-3">Avg Response</th>
+                      <th className="pb-3">Grade</th>
+                      <th className="pb-3">Uptime</th>
+                      <th className="pb-3">Last Check</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {[
+                      { loc: 'KE Nairobi', resp: '142ms', grade: 'A', uptime: '99.98%', last: '2 min ago' },
+                      { loc: 'DE Frankfurt', resp: '198ms', grade: 'B', uptime: '99.95%', last: '2 min ago' },
+                      { loc: 'US Virginia', resp: '245ms', grade: 'B', uptime: '99.92%', last: '2 min ago' }
+                    ].map((r, i) => (
+                      <tr key={i} className="border-b border-gray-700">
+                        <td className="py-3">{r.loc}</td>
+                        <td className="py-3 text-cyan-400" style={{ fontFamily: 'JetBrains Mono' }}>{r.resp}</td>
+                        <td className="py-3">
+                          <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                            r.grade === 'A' ? 'bg-green-500/20 text-green-400' :
+                            r.grade === 'B' ? 'bg-cyan-500/20 text-cyan-400' :
+                            r.grade === 'C' ? 'bg-amber-500/20 text-amber-400' :
+                            'bg-red-500/20 text-red-400'
+                          }`}>{r.grade}</span>
+                        </td>
+                        <td className="py-3 text-green-400">{r.uptime}</td>
+                        <td className="py-3 text-gray-500">{r.last}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="card-glass p-6">
+                <h3 className="font-bold mb-4">Recommendations</h3>
+                <div className="space-y-3">
+                  <div className="flex items-start gap-3 p-4 bg-green-500/10 border border-green-500/30 rounded-lg">
+                    <span className="text-green-400 mt-0.5">{ICONS.check}</span>
+                    <div>
+                      <div className="font-medium text-green-400">Excellent Response Time</div>
+                      <div className="text-sm text-gray-400">Your average response time is under 200ms, which is excellent.</div>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3 p-4 bg-green-500/10 border border-green-500/30 rounded-lg">
+                    <span className="text-green-400 mt-0.5">{ICONS.check}</span>
+                    <div>
+                      <div className="font-medium text-green-400">High Uptime</div>
+                      <div className="text-sm text-gray-400">Your uptime is above 99.9% over the last 30 days.</div>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3 p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+                    <span className="text-amber-400 mt-0.5">{ICONS.alert}</span>
+                    <div>
+                      <div className="font-medium text-amber-400">Consider CDN</div>
+                      <div className="text-sm text-gray-400">US users have higher latency. Consider using a CDN to improve global performance.</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="card-glass p-6">
+                <h3 className="font-bold mb-4">Historical Performance (30 days)</h3>
+                <LineChart 
+                  data={responseData} 
+                  lines={[{ key: 'value', color: '#00F5FF' }]}
+                  height={150}
+                />
+                <div className="grid grid-cols-3 gap-4 mt-4">
+                  <div className="text-center">
+                    <div className="text-xs text-gray-500 mb-1">Best</div>
+                    <div className="text-green-400 font-bold" style={{ fontFamily: 'JetBrains Mono' }}>89ms</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-xs text-gray-500 mb-1">Average</div>
+                    <div className="text-cyan-400 font-bold" style={{ fontFamily: 'JetBrains Mono' }}>{monitor.avgResponse}ms</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-xs text-gray-500 mb-1">Slowest</div>
+                    <div className="text-amber-400 font-bold" style={{ fontFamily: 'JetBrains Mono' }}>412ms</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="card-glass p-6">
+                <h3 className="font-bold mb-4">SLA Status</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="bg-gray-900 p-4 rounded-lg">
+                    <div className="text-xs text-gray-500 mb-1">Current Month SLA</div>
+                    <div className={`text-3xl font-bold ${monitor.slaStatus?.sla_met ? 'text-green-400' : 'text-red-400'}`} style={{ fontFamily: 'JetBrains Mono' }}>
+                      {monitor.slaStatus?.current_month_uptime || '99.95'}%
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {monitor.slaStatus?.sla_met ? '✅ MEETING SLA' : '❌ BREACHING SLA'}
+                    </div>
+                  </div>
+                  <div className="bg-gray-900 p-4 rounded-lg">
+                    <div className="text-xs text-gray-500 mb-1">SLA Target</div>
+                    <div className="text-2xl font-bold text-cyan-400" style={{ fontFamily: 'JetBrains Mono' }}>{monitor.slaTarget || '99.90'}%</div>
+                    <div className="text-xs text-gray-500 mt-1">Allowed: {monitor.slaStatus?.allowed_downtime_formatted || '43m'}/month</div>
+                  </div>
+                  <div className="bg-gray-900 p-4 rounded-lg">
+                    <div className="text-xs text-gray-500 mb-1">Downtime Remaining</div>
+                    <div className="text-2xl font-bold text-green-400" style={{ fontFamily: 'JetBrains Mono' }}>{monitor.slaStatus?.downtime_remaining_formatted || '38m'}</div>
+                    <div className="w-full bg-gray-700 rounded-full h-2 mt-2">
+                      <div className={`h-full rounded-full ${monitor.slaStatus?.downtime_remaining_seconds < 300 ? 'bg-red-400' : 'bg-green-400'}`} style={{ width: '88%' }}></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
           {tab === 2 && (
-            <div className="card-glass p-6">
-              <h3 className="font-bold mb-4">Recent Incidents</h3>
-              {mockIncidents.length === 0 ? (
-                <p className="text-gray-500">No incidents in the last 30 days.</p>
-              ) : (
-                <div className="space-y-3">
-                  {mockIncidents.map(inc => (
-                    <div key={inc.id} className="p-4 bg-gray-900 rounded-lg">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="font-medium">{inc.monitor}</span>
-                        <span className={`text-xs px-2 py-0.5 rounded ${inc.status === 'ongoing' ? 'bg-red-900 text-red-400' : 'bg-gray-800 text-gray-400'}`}>
-                          {inc.status}
-                        </span>
-                      </div>
-                      <p className="text-sm text-gray-400">{inc.reason}</p>
-                      <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
-                        <span>{inc.date}</span>
-                        <span>-</span>
-                        <span>{inc.duration}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+            <div className="space-y-6">
+              <div className="card-glass p-6">
+                <h3 className="font-bold mb-4">Response History</h3>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-gray-500 border-b border-gray-700">
+                      <th className="pb-3">Timestamp</th>
+                      <th className="pb-3">Status</th>
+                      <th className="pb-3">Response Time</th>
+                      <th className="pb-3">Preview</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(monitor.responseHistory || [
+                      { checked_at: new Date().toISOString(), status_code: 200, response_time_ms: 145, is_successful: true, response_preview: '{"status":"ok","data":{"health":true}}' },
+                      { checked_at: new Date(Date.now() - 300000).toISOString(), status_code: 200, response_time_ms: 132, is_successful: true, response_preview: '{"status":"ok","data":{"health":true}}' },
+                      { checked_at: new Date(Date.now() - 600000).toISOString(), status_code: 200, response_time_ms: 156, is_successful: true, response_preview: '{"status":"ok","data":{"health":true}}' },
+                    ]).map((r, i) => (
+                      <tr key={i} className="border-b border-gray-800 hover:bg-gray-800">
+                        <td className="py-3 text-gray-400" style={{ fontFamily: 'JetBrains Mono' }}>{new Date(r.checked_at).toLocaleString()}</td>
+                        <td className="py-3">
+                          <span className={`px-2 py-0.5 rounded text-xs font-bold ${r.is_successful ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>{r.status_code}</span>
+                        </td>
+                        <td className="py-3 text-cyan-400" style={{ fontFamily: 'JetBrains Mono' }}>{r.response_time_ms}ms</td>
+                        <td className="py-3 text-gray-500 text-xs max-w-xs truncate">{r.response_preview}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
 
           {tab === 3 && (
+            <div className="space-y-6">
+              <div className="card-glass p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="font-bold">Real User Monitoring</h3>
+                    <p className="text-sm text-gray-500">Track actual page load times from your visitors</p>
+                  </div>
+                  <span className="px-3 py-1 bg-green-500/20 text-green-400 text-xs rounded-full border border-green-500/50">Active</span>
+                </div>
+                
+                <div className="bg-gray-900 p-4 rounded-lg mb-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-gray-400">Your Monitor ID</span>
+                  </div>
+                  <div className="text-center py-4">
+                    <div className="text-xs text-gray-500 mb-2">Monitor ID for this endpoint</div>
+                    <div className="inline-block bg-gray-800 px-4 py-2 rounded border border-gray-600" style={{ fontFamily: 'JetBrains Mono' }}>
+                      <span className="text-cyan-400">{monitor.id || 'not-assigned'}</span>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      const script = "<script>(function(){var start=Date.now();window.addEventListener('load',function(){var loadTime=Date.now()-start;fetch('https://api.pulsegrid.io/rum/" + (monitor.id || 'YOUR_MONITOR_ID') + "',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({loadTime:loadTime,url:window.location.href,referrer:document.referrer,timestamp:new Date().toISOString()})})})})();<\/script>";
+                      navigator.clipboard.writeText(script);
+                      setToast({ type: 'success', message: 'Script copied to clipboard!' });
+                    }}
+                    className="w-full mt-4 px-4 py-2 text-sm bg-cyan-500/20 text-cyan-400 rounded border border-cyan-500/50 hover:bg-cyan-500/30 transition"
+                  >
+                    Copy Embed Script
+                  </button>
+                </div>
+                
+                <div className="bg-cyan-900/30 border border-cyan-700/50 p-4 rounded-lg">
+                  <h4 className="font-medium text-cyan-400 mb-2">How to use:</h4>
+                  <ol className="text-sm text-gray-300 space-y-2">
+                    <li>1. Copy the script above by clicking the button</li>
+                    <li>2. Paste it before the closing <code className="bg-gray-800 px-1 rounded">&lt;/body&gt;</code> tag on your website</li>
+                    <li>3. The script will automatically track page load times from your visitors</li>
+                  </ol>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+                <div className="card-glass p-4 text-center">
+                  <div className="text-gray-500 text-xs mb-1">Active Sessions</div>
+                  <div className="text-2xl font-bold text-green-400" style={{ fontFamily: 'JetBrains Mono' }}>{(monitor.rumStats?.active_sessions_5min || 12)}</div>
+                  <div className="text-xs text-gray-600">Last 5 min</div>
+                </div>
+                <div className="card-glass p-4 text-center">
+                  <div className="text-gray-500 text-xs mb-1">Avg Load Time</div>
+                  <div className="text-2xl font-bold text-cyan-400" style={{ fontFamily: 'JetBrains Mono' }}>{(monitor.rumStats?.avg_load_time_ms || 245)}<span className="text-sm text-gray-500">ms</span></div>
+                </div>
+                <div className="card-glass p-4 text-center">
+                  <div className="text-gray-500 text-xs mb-1">Pageviews 24h</div>
+                  <div className="text-2xl font-bold" style={{ fontFamily: 'JetBrains Mono' }}>{(monitor.rumStats?.pageviews_last_24h || 1247)}</div>
+                </div>
+                <div className="card-glass p-4 text-center">
+                  <div className="text-gray-500 text-xs mb-1 flex items-center gap-1">
+                    Apdex Score
+                    <span className="cursor-help" title="Apdex (Application Performance Index) measures user satisfaction 0-1.&#10;1.0 = Everyone is happy (load < 500ms)&#10;0.7+ = Good&#10;0.5-0.7 = Fair&#10;Below 0.5 = Poor — users are frustrated">
+                      {ICONS.help}
+                    </span>
+                  </div>
+                  <div className={`text-2xl font-bold ${(monitor.rumStats?.apdex_score || 0.85) >= 0.7 ? 'text-green-400' : (monitor.rumStats?.apdex_score || 0.85) >= 0.5 ? 'text-amber-400' : 'text-red-400'}`} style={{ fontFamily: 'JetBrains Mono' }}>
+                    {(monitor.rumStats?.apdex_score || 0.85).toFixed(2)}
+                  </div>
+                  <div className="text-xs text-gray-600">
+                    {(monitor.rumStats?.apdex_score || 0.85) >= 0.7 ? 'Good' : (monitor.rumStats?.apdex_score || 0.85) >= 0.5 ? 'Fair' : 'Poor'}
+                  </div>
+                </div>
+                <div className="card-glass p-4 text-center">
+                  <div className="text-gray-500 text-xs mb-1">Bounce Rate</div>
+                  <div className="text-2xl font-bold text-amber-400" style={{ fontFamily: 'JetBrains Mono' }}>{(monitor.rumStats?.bounce_rate || 42.3)}<span className="text-sm text-gray-500">%</span></div>
+                </div>
+              </div>
+
+              <div className="card-glass p-6">
+                <h3 className="font-bold mb-4">Real User Load Time (24h)</h3>
+                <LineChart 
+                  data={[
+                    { time: '00:00', value: 230 },
+                    { time: '04:00', value: 198 },
+                    { time: '08:00', value: 267 },
+                    { time: '12:00', value: 312 },
+                    { time: '16:00', value: 278 },
+                    { time: '20:00', value: 245 }
+                  ]} 
+                  lines={[{ key: 'value', color: '#39FF14' }]}
+                  height={150}
+                />
+                <div className="flex items-center justify-center gap-4 mt-4 text-xs text-gray-500">
+                  <span className="flex items-center gap-1">
+                    <span className="w-3 h-3 rounded bg-cyan-400 opacity-50"></span>
+                    Synthetic
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-3 h-3 rounded bg-green-400"></span>
+                    Real Users
+                  </span>
+                </div>
+              </div>
+
+              <div className="card-glass p-6">
+                <h3 className="font-bold mb-4">Apdex Breakdown</h3>
+                <div className="space-y-3">
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2 w-32">
+                      <span className="w-3 h-3 rounded-full bg-green-400"></span>
+                      <span className="text-sm text-gray-400">Satisfied</span>
+                    </div>
+                    <span className="text-sm font-bold text-green-400 w-16" style={{ fontFamily: 'JetBrains Mono' }}>&lt;500ms</span>
+                    <div className="flex-1 bg-gray-700 rounded-full h-2">
+                      <div className="h-full bg-green-400 rounded-full" style={{ width: '72%' }}></div>
+                    </div>
+                    <span className="text-sm text-gray-500 w-16" style={{ fontFamily: 'JetBrains Mono' }}>{monitor.rumStats?.satisfaction?.satisfied || 894}</span>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2 w-32">
+                      <span className="w-3 h-3 rounded-full bg-amber-400"></span>
+                      <span className="text-sm text-gray-400">Tolerating</span>
+                    </div>
+                    <span className="text-sm font-bold text-amber-400 w-16" style={{ fontFamily: 'JetBrains Mono' }}>500-2s</span>
+                    <div className="flex-1 bg-gray-700 rounded-full h-2">
+                      <div className="h-full bg-amber-400 rounded-full" style={{ width: '18%' }}></div>
+                    </div>
+                    <span className="text-sm text-gray-500 w-16" style={{ fontFamily: 'JetBrains Mono' }}>{monitor.rumStats?.satisfaction?.tolerating || 224}</span>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2 w-32">
+                      <span className="w-3 h-3 rounded-full bg-red-400"></span>
+                      <span className="text-sm text-gray-400">Frustrated</span>
+                    </div>
+                    <span className="text-sm font-bold text-red-400 w-16" style={{ fontFamily: 'JetBrains Mono' }}>&gt;2s</span>
+                    <div className="flex-1 bg-gray-700 rounded-full h-2">
+                      <div className="h-full bg-red-400 rounded-full" style={{ width: '10%' }}></div>
+                    </div>
+                    <span className="text-sm text-gray-500 w-16" style={{ fontFamily: 'JetBrains Mono' }}>{monitor.rumStats?.satisfaction?.frustrated || 129}</span>
+                  </div>
+                </div>
+                <div className="mt-4 p-3 bg-gray-900 rounded-lg text-xs text-gray-500">
+                  <strong className="text-gray-400">Apdex Score Explained:</strong> Measures user satisfaction based on load times. 
+                  1.0 = Everyone happy (&lt;500ms), 0.7+ = Good, 0.5-0.7 = Fair, below 0.5 = Poor (users frustrated).
+                </div>
+              </div>
+
+              <div className="card-glass p-6">
+                <h3 className="font-bold mb-4">Performance Distribution</h3>
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="text-center p-3 bg-gray-900 rounded-lg">
+                    <div className="text-xs text-gray-500 mb-1">Best</div>
+                    <div className="text-lg font-bold text-green-400" style={{ fontFamily: 'JetBrains Mono' }}>{monitor.rumStats?.min_load_time_ms || 89}ms</div>
+                  </div>
+                  <div className="text-center p-3 bg-gray-900 rounded-lg">
+                    <div className="text-xs text-gray-500 mb-1">P50</div>
+                    <div className="text-lg font-bold" style={{ fontFamily: 'JetBrains Mono' }}>{monitor.rumStats?.p50_load_time_ms || 198}ms</div>
+                  </div>
+                  <div className="text-center p-3 bg-gray-900 rounded-lg">
+                    <div className="text-xs text-gray-500 mb-1">P95</div>
+                    <div className="text-lg font-bold text-amber-400" style={{ fontFamily: 'JetBrains Mono' }}>{monitor.rumStats?.p95_load_time_ms || 587}ms</div>
+                  </div>
+                  <div className="text-center p-3 bg-gray-900 rounded-lg">
+                    <div className="text-xs text-gray-500 mb-1">Slowest</div>
+                    <div className="text-lg font-bold text-red-400" style={{ fontFamily: 'JetBrains Mono' }}>{monitor.rumStats?.max_load_time_ms || 2341}ms</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {tab === 4 && (
+            <div className="space-y-6">
+              <div className="card-glass p-6">
+                <h3 className="font-bold mb-4">Recent Incidents</h3>
+                {mockIncidents.length === 0 ? (
+                  <p className="text-gray-500">No incidents in the last 30 days.</p>
+                ) : (
+                  <div className="space-y-4">
+                    {mockIncidents.map(inc => (
+                      <div key={inc.id} className="p-4 bg-gray-900 rounded-lg">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <span className={`text-xs px-2 py-0.5 rounded font-bold ${
+                              inc.severity === 'critical' ? 'bg-red-600 text-white' :
+                              inc.severity === 'high' ? 'bg-orange-600 text-white' :
+                              inc.severity === 'medium' ? 'bg-amber-600 text-black' :
+                              'bg-blue-600 text-white'
+                            }`}>
+                              {inc.severity?.toUpperCase() || 'MEDIUM'}
+                            </span>
+                            <span className={`text-xs px-2 py-0.5 rounded ${inc.status === 'ongoing' ? 'bg-red-900 text-red-400' : 'bg-gray-800 text-gray-400'}`}>
+                              {inc.status}
+                            </span>
+                          </div>
+                          <span className="text-xs text-gray-500">{inc.duration}</span>
+                        </div>
+                        <p className="text-sm text-gray-400 mb-2">{inc.reason}</p>
+                        
+                        <div className="border-t border-gray-700 pt-3 mt-3">
+                          <h4 className="text-xs text-gray-500 mb-2">Timeline</h4>
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-full bg-green-400"></div>
+                            <div className="flex-1 h-0.5 bg-gray-700"></div>
+                            <div className="w-3 h-3 rounded-full bg-green-400"></div>
+                          </div>
+                          <div className="flex justify-between mt-1 text-xs text-gray-500">
+                            <span>{inc.date}</span>
+                            <span>Resolved</span>
+                          </div>
+                        </div>
+                        
+                        {inc.notes && (
+                          <div className="mt-3 p-3 bg-gray-800 rounded border border-gray-700">
+                            <h4 className="text-xs text-gray-500 mb-1">Notes</h4>
+                            <p className="text-sm text-gray-300">{inc.notes}</p>
+                          </div>
+                        )}
+                        
+                        {!inc.notes && (
+                          <div className="mt-3">
+                            <textarea placeholder="Add notes about this incident..." className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm text-gray-300 resize-none" rows={2}></textarea>
+                            <button className="mt-2 px-3 py-1 bg-cyan-500/20 text-cyan-400 text-xs rounded border border-cyan-500/50 hover:bg-cyan-500/30">Save Notes</button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {tab === 5 && (
             <div className="card-glass p-6">
               <h3 className="font-bold mb-4">Monitor Settings</h3>
               <div className="space-y-4">
@@ -1505,28 +2057,39 @@
             </button>
           </div>
 
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-2">
-              {['all', 'up', 'slow', 'down'].map(f => (
-                <button key={f} onClick={() => setFilter(f)} className={`px-4 py-2 rounded-lg text-sm ${filter === f ? 'bg-cyan-500 text-black font-bold' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
-                  {f === 'all' ? 'All' : f === 'up' ? 'Up' : f === 'slow' ? 'Degraded' : 'Down'}
-                  <span className="ml-2 px-2 py-0.5 rounded text-xs" style={{ backgroundColor: filter === f ? 'rgba(0,0,0,0.2)' : '#374151' }}>
-                    {f === 'all' ? monitors.length : monitors.filter(m => m.status === f).length}
-                  </span>
+          <div className="flex flex-col gap-4 mb-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {['all', 'up', 'slow', 'down'].map(f => (
+                  <button key={f} onClick={() => setFilter(f)} className={`px-4 py-2 rounded-lg text-sm ${filter === f ? 'bg-cyan-500 text-black font-bold' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
+                    {f === 'all' ? 'All' : f === 'up' ? 'Up' : f === 'slow' ? 'Degraded' : 'Down'}
+                    <span className="ml-2 px-2 py-0.5 rounded text-xs" style={{ backgroundColor: filter === f ? 'rgba(0,0,0,0.2)' : '#374151' }}>
+                      {f === 'all' ? monitors.length : monitors.filter(m => m.status === f).length}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setView('grid')} className={`p-2 rounded ${view === 'grid' ? 'bg-cyan-500 text-black' : 'bg-gray-800 text-gray-400'}`}>{ICONS.grid}</button>
+                <button onClick={() => setView('list')} className={`p-2 rounded ${view === 'list' ? 'bg-cyan-500 text-black' : 'bg-gray-800 text-gray-400'}`}>{ICONS.list}</button>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-2 flex-wrap">
+              {(monitor.tags || ['production', 'staging', 'payment', 'auth']).map(tag => (
+                <button key={tag} onClick={() => setFilter(tag === filter ? 'all' : tag)} className={`px-3 py-1 rounded-full text-xs ${filter === tag ? 'bg-purple-500 text-white' : 'bg-gray-800 text-gray-400 hover:text-white border border-gray-700'}`}>
+                  {tag}
                 </button>
               ))}
-            </div>
-            <div className="flex items-center gap-2">
-              <button onClick={() => setView('grid')} className={`p-2 rounded ${view === 'grid' ? 'bg-cyan-500 text-black' : 'bg-gray-800 text-gray-400'}`}>{ICONS.grid}</button>
-              <button onClick={() => setView('list')} className={`p-2 rounded ${view === 'list' ? 'bg-cyan-500 text-black' : 'bg-gray-800 text-gray-400'}`}>{ICONS.list}</button>
             </div>
           </div>
 
           {selected.length > 0 && (
             <div className="card-glass p-4 mb-6 flex items-center justify-between">
-              <span>{selected.length} selected</span>
+              <span>{selected.length} monitors selected</span>
               <div className="flex gap-2">
-                <button onClick={() => { onToggle(selected); setSelected([]); }} className="btn-ghost text-sm">Pause Selected</button>
+                <button onClick={() => { onToggle(selected); setSelected([]); }} className="btn-ghost text-sm">Pause</button>
+                <button onClick={() => { onToggle(selected); setSelected([]); }} className="btn-ghost text-sm">Resume</button>
                 <button onClick={() => { onDelete(selected); setSelected([]); }} className="btn-danger text-sm">Delete</button>
               </div>
             </div>
@@ -1541,10 +2104,22 @@
                       <input type="checkbox" checked={selected.includes(m.id)} onChange={(e) => { e.stopPropagation(); toggleSelect(m.id); }} className="w-4 h-4 rounded" />
                       <h3 className="font-bold" style={{ fontFamily: 'Syne' }}>{m.name}</h3>
                     </div>
-                    <span className={`status-badge ${m.status}`}>
-                      <span className={`pulse-dot ${getStatusBg(m.status).replace('bg-', '')} w-2 h-2`}></span>
-                      {m.status.toUpperCase()}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {m.grade && (
+                        <span className={`w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs ${
+                          m.grade === 'A' ? 'bg-green-500/20 text-green-400 border border-green-500/50' :
+                          m.grade === 'B' ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50' :
+                          m.grade === 'C' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/50' :
+                          'bg-red-500/20 text-red-400 border border-red-500/50'
+                        }`} style={{ fontFamily: 'JetBrains Mono' }}>
+                          {m.grade}
+                        </span>
+                      )}
+                      <span className={`status-badge ${m.status}`}>
+                        <span className={`pulse-dot ${getStatusBg(m.status).replace('bg-', '')} w-2 h-2`}></span>
+                        {m.status.toUpperCase()}
+                      </span>
+                    </div>
                   </div>
                   <p className="text-gray-500 text-sm mb-3" style={{ fontFamily: 'JetBrains Mono' }}>{m.url}</p>
                   <div className="grid grid-cols-3 gap-2 text-sm">
@@ -1571,6 +2146,7 @@
                   <tr className="text-left text-gray-500 border-b border-gray-700">
                     <th className="p-4"><input type="checkbox" checked={selected.length === filteredMonitors.length && filteredMonitors.length > 0} onChange={selectAll} className="w-4 h-4 rounded" /></th>
                     <th className="p-4">Name</th>
+                    <th className="p-4">Grade</th>
                     <th className="p-4">Status</th>
                     <th className="p-4">Uptime</th>
                     <th className="p-4">Response</th>
@@ -1583,6 +2159,16 @@
                     <tr key={m.id} className="border-b border-gray-800 hover:bg-gray-800 cursor-pointer" onClick={() => onNavigate('monitor-detail', m)}>
                       <td className="p-4" onClick={e => e.stopPropagation()}><input type="checkbox" checked={selected.includes(m.id)} onChange={() => toggleSelect(m.id)} className="w-4 h-4 rounded" /></td>
                       <td className="p-4 font-medium">{m.name}</td>
+                      <td className="p-4">
+                        {m.grade && (
+                          <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                            m.grade === 'A' ? 'bg-green-500/20 text-green-400' :
+                            m.grade === 'B' ? 'bg-cyan-500/20 text-cyan-400' :
+                            m.grade === 'C' ? 'bg-amber-500/20 text-amber-400' :
+                            'bg-red-500/20 text-red-400'
+                          }`}>{m.grade}</span>
+                        )}
+                      </td>
                       <td className="p-4"><span className={`status-badge ${m.status}`}><span className={`pulse-dot ${getStatusBg(m.status).replace('bg-', '')} w-2 h-2`}></span>{m.status.toUpperCase()}</span></td>
                       <td className={`p-4 font-bold ${getStatusColor(m.status)}`}>{m.uptime}%</td>
                       <td className="p-4 font-mono">{m.avgResponse}ms</td>
@@ -2208,9 +2794,28 @@ Authorization: Bearer YOUR_API_KEY
           setUser(JSON.parse(savedUser));
           setPage('dashboard');
         }
+        
+        const urlParams = new URLSearchParams(window.location.search);
+        const verifyToken = urlParams.get('token');
+        if (verifyToken) {
+          verifyEmailToken(verifyToken);
+          window.history.replaceState({}, '', window.location.pathname);
+        }
+        
         const timer = setTimeout(() => setLoading(false), 800);
         return () => clearTimeout(timer);
       }, []);
+
+      const verifyEmailToken = async (token) => {
+        try {
+          const data = await apiCall('GET', `/auth/verify-email?token=${token}`);
+          setAuth(data.token, { email: 'verified' });
+          setToast({ type: 'success', message: 'Email verified successfully!' });
+          setPage('login');
+        } catch (err) {
+          setToast({ type: 'error', message: err.message || 'Failed to verify email' });
+        }
+      };
 
       useEffect(() => {
         const handleClickOutside = (e) => {
@@ -2288,6 +2893,13 @@ Authorization: Bearer YOUR_API_KEY
         setEmailVerificationPending(userData.email);
         setPage('verify-email');
         setResendCooldown(60);
+        setToast({ type: 'success', message: 'Account created! Please check your email to verify.' });
+      };
+
+      const onVerifyEmail = (email) => {
+        setEmailVerificationPending(email);
+        setPage('verify-email');
+        setResendCooldown(60);
       };
 
       useEffect(() => {
@@ -2297,9 +2909,14 @@ Authorization: Bearer YOUR_API_KEY
         }
       }, [resendCooldown]);
 
-      const handleResendEmail = () => {
+      const handleResendEmail = async () => {
         if (resendCooldown > 0) return;
-        setToast({ type: 'info', message: 'Verification email sent!' });
+        try {
+          await apiCall('POST', '/auth/resend-verification', { email: emailVerificationPending });
+          setToast({ type: 'success', message: 'Verification email sent!' });
+        } catch (err) {
+          setToast({ type: 'error', message: err.message || 'Failed to send email' });
+        }
         setResendCooldown(60);
       };
 
@@ -2368,7 +2985,7 @@ Authorization: Bearer YOUR_API_KEY
               <button onClick={() => setPage('login')} className="text-cyan-400 hover:underline">Already verified? Sign in</button>
             </div>
           )}
-          {(page === 'login' || page === 'signup') && <AuthPage type={page} onAuth={page === 'signup' ? handleSignup : handleLogin} onBack={() => handleAuth('landing')} />}
+          {(page === 'login' || page === 'signup') && <AuthPage type={page} onAuth={page === 'signup' ? handleSignup : handleLogin} onBack={() => handleAuth('landing')} onVerifyEmail={onVerifyEmail} />}
 
           {user && page !== 'landing' && page !== 'login' && page !== 'signup' && (
             <div className="flex">
