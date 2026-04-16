@@ -2,14 +2,14 @@
 const { useState, useEffect } = React;
 const { LineChart, Line, AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } = Recharts;
 
-// Firebase configuration - Replace with your Firebase config
+// Firebase configuration
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyDfjv_pqvhJVp9x5cDcxp5RZbegp2eMbdE",
+  authDomain: "pulsegrid-f5631.firebaseapp.com",
+  projectId: "pulsegrid-f5631",
+  storageBucket: "pulsegrid-f5631.firebasestorage.app",
+  messagingSenderId: "546734052192",
+  appId: "1:546734052192:web:a15ee622fdf1d0c8c78405"
 };
 
 // Initialize Firebase
