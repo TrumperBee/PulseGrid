@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const mimeTypes = {
-  '.html': 'text/html',
+  '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript',
   '.css': 'text/css',
   '.json': 'application/json',
@@ -12,6 +12,12 @@ const mimeTypes = {
   '.ico': 'image/x-icon',
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
+};
+
+const noCacheHeaders = {
+  'Cache-Control': 'no-cache, no-store, must-revalidate',
+  'Pragma': 'no-cache',
+  'Expires': '0'
 };
 
 const server = http.createServer((req, res) => {
@@ -30,19 +36,19 @@ const server = http.createServer((req, res) => {
             res.end('Manifest not found');
             return;
           }
-          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.writeHead(200, { 'Content-Type': 'application/json', ...noCacheHeaders });
           res.end(data2);
         });
         return;
       }
       filePath = path.join(__dirname, 'index.html');
       fs.readFile(filePath, (err2, data2) => {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', ...noCacheHeaders });
         res.end(data2);
       });
       return;
     }
-    res.writeHead(200, { 'Content-Type': contentType });
+    res.writeHead(200, { 'Content-Type': contentType, ...noCacheHeaders });
     res.end(data);
   });
 });

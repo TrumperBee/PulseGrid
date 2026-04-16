@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pulsegrid-v1';
+const CACHE_NAME = 'pulsegrid-v2';
 const urlsToCache = [
   '/',
   '/index.html'
@@ -13,6 +13,22 @@ self.addEventListener('install', event => {
 });
 
 self.addEventListener('fetch', event => {
+  if (event.request.url.includes('index.html')) {
+    event.respondWith(
+      fetch(event.request)
+        .then(response => {
+          const responseToCache = response.clone();
+          caches.open(CACHE_NAME)
+            .then(cache => {
+              cache.put(event.request, responseToCache);
+            });
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
+  
   event.respondWith(
     caches.match(event.request)
       .then(response => {
@@ -39,7 +55,7 @@ self.addEventListener('activate', event => {
     caches.keys().then(cacheNames => {
       return Promise.all(
         cacheNames.map(cacheName => {
-          if (cacheName !== CACHE_NAME) {
+          if (cacheName.indexOf('pulsegrid-v') === 0 && cacheName !== CACHE_NAME) {
             return caches.delete(cacheName);
           }
         })
