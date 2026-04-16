@@ -619,19 +619,22 @@ const App = () => {
       if (user) {
         try {
           const doc = await db.collection('users').doc(user.uid).get();
-          if (doc.exists) { userData = doc.data(); setUserData(userData); }
+          if (doc.exists) { 
+            const newUserData = doc.data(); 
+            setUserData(newUserData); 
+          }
           else {
             await db.collection('users').doc(user.uid).set({
               uid: user.uid, email: user.email, fullName: user.displayName || '', companyName: '',
               plan: 'pro', createdAt: firebase.firestore.FieldValue.serverTimestamp(), avatarUrl: user.photoURL || '', emailVerified: user.emailVerified
             });
-            userData = { uid: user.uid, email: user.email, fullName: user.displayName || '', plan: 'pro' };
-            setUserData(userData);
+            const newUserData = { uid: user.uid, email: user.email, fullName: user.displayName || '', plan: 'pro' };
+            setUserData(newUserData);
           }
         } catch (err) { console.error('Error loading user data:', err); }
         setCurrentPage('dashboard');
       } else {
-        userData = null; setUserData(null);
+        setUserData(null);
         setCurrentPage('landing');
       }
       setLoading(false);
