@@ -1,7 +1,7 @@
 const { useState, useEffect, useRef } = React;
 const { LineChart, Line, AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } = Recharts;
 
-const API_URL = 'http://localhost:5000/api';
+const API_URL = '/api';
 
 const apiCall = async (method, endpoint, data = null) => {
   const savedUser = localStorage.getItem('pulsegrid_user');
