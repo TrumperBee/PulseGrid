@@ -2250,9 +2250,10 @@ const App = () => {
   const [resendCooldown, setResendCooldown] = useState(0);
   const [confirmModal, setConfirmModal] = useState(null);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const toast = (type, message) => setToastData({ type, message });
-  const navigate = (page) => setCurrentPage(page);
+  const navigate = (page) => { setCurrentPage(page); setMobileMenuOpen(false); };
   const handleLogout = () => { setShowLogoutConfirm(true); };
   const confirmLogout = async () => { setShowLogoutConfirm(false); await auth.signOut(); };
   const cancelLogout = () => { setShowLogoutConfirm(false); };
@@ -2337,8 +2338,16 @@ const App = () => {
         {currentPage === 'verify-email' && auth.currentUser && <EmailVerificationScreen email={auth.currentUser.email} onResend={handleResendVerification} onContinue={handleVerifyContinue} onBack={() => auth.signOut()} resendCooldown={resendCooldown} />}
         {showApp && (
           <div className="flex">
-            <aside className="sidebar">
-              <div className="p-4 border-b border-gray-800 flex items-center gap-2">{ICONS.radio}<span className="text-xl font-bold" style={{ fontFamily: 'Syne' }}>PulseGrid</span></div>
+            <div className="mobile-header">
+              <button className="mobile-menu-btn" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>☰</button>
+              <span className="font-bold" style={{ fontFamily: 'Syne' }}>PulseGrid</span>
+              <div style={{ width: 40 }}></div>
+            </div>
+            <aside className={`sidebar ${mobileMenuOpen ? 'open' : ''}`} onClick={() => setMobileMenuOpen(false)}>
+              <div className="p-4 border-b border-gray-800 flex items-center justify-between">
+                <div className="flex items-center gap-2">{ICONS.radio}<span className="text-xl font-bold" style={{ fontFamily: 'Syne' }}>PulseGrid</span></div>
+                <button className="text-gray-500 md:hidden" onClick={() => setMobileMenuOpen(false)}>✕</button>
+              </div>
               <nav className="p-2">
                 {[{ icon: ICONS.home, label: 'Dashboard', page: 'dashboard' }, { icon: ICONS.activity, label: 'Monitors', page: 'monitors' }, { icon: ICONS.plus, label: 'Add Monitor', page: 'add-monitor' }, { icon: ICONS.globe, label: 'Status Pages', page: 'status-pages' }, { icon: ICONS.file, label: 'Reports', page: 'reports' }, { icon: ICONS.zap, label: 'API Docs', page: 'api-docs' }, { icon: ICONS.settings, label: 'Settings', page: 'settings' }].map(item => (
                   <button key={item.page} onClick={() => setCurrentPage(item.page)} className={`sidebar-item w-full ${currentPage === item.page ? 'active' : ''}`}>{item.icon}<span>{item.label}</span></button>
@@ -2346,6 +2355,7 @@ const App = () => {
                 <button onClick={handleLogout} className="sidebar-item w-full text-red-400 hover:bg-red-900/30 mt-4 pt-4 border-t border-gray-800">{ICONS.logout || ICONS.x}<span>Logout</span></button>
               </nav>
             </aside>
+            {mobileMenuOpen && <div className="fixed inset-0 bg-black/50 z-[99]" onClick={() => setMobileMenuOpen(false)} />}
             <main className="flex-1 md:ml-60">
               <header className="sticky top-0 z-30 bg-black border-b border-gray-800 px-6 py-4">
                 <div className="flex items-center justify-between">
