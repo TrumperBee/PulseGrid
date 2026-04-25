@@ -173,15 +173,136 @@ const MONITORING_REGIONS = [
   { id: 'frankfurt', name: 'Frankfurt', country: 'Germany', lat: 50.1109, lon: 8.6821, flag: '🇩🇪' },
   { id: 'newyork', name: 'New York', country: 'USA', lat: 40.7128, lon: -74.0060, flag: '🇺🇸' },
   { id: 'london', name: 'London', country: 'UK', lat: 51.5074, lon: -0.1278, flag: '🇬🇧' },
-  { id: 'singapore', name: 'Singapore', country: 'Singapore', lat: 1.3521, lon: 103.8198, flag: '🇸🇬' },
+  { id: 'singapore', name: 'Singapore', country: 'Singapore', lat: 1.3521, lon: 103.8198, flag: '🇸🇬', plan: 'pro' },
   { id: 'tokyo', name: 'Tokyo', country: 'Japan', lat: 35.6762, lon: 139.6503, flag: '🇯🇵' },
   { id: 'sydney', name: 'Sydney', country: 'Australia', lat: -33.8688, lon: 151.2093, flag: '🇦🇺' },
-  { id: 'saopaulo', name: 'São Paulo', country: 'Brazil', lat: -23.5505, lon: -46.6333, flag: '🇧🇷' },
+  { id: 'saopaulo', name: 'São Paulo', country: 'Brazil', lat: -23.5505, lon: -46.6333, flag: '🇧🇷', plan: 'pro' },
   { id: 'mumbai', name: 'Mumbai', country: 'India', lat: 19.0760, lon: 72.8777, flag: '🇮🇳' },
   { id: 'dubai', name: 'Dubai', country: 'UAE', lat: 25.2048, lon: 55.2708, flag: '🇦🇪' },
   { id: 'amsterdam', name: 'Amsterdam', country: 'Netherlands', lat: 52.3676, lon: 4.9044, flag: '🇳🇱' },
   { id: 'toronto', name: 'Toronto', country: 'Canada', lat: 43.6532, lon: -79.3832, flag: '🇨🇦' },
 ];
+
+// Leaflet Map component
+const LeafletMap = ({ monitors = [], userData }) => {
+  const mapRef = useRef(null);
+  const mapInstance = useRef(null);
+  const markersRef = useRef({});
+  
+  useEffect(() => {
+    if (!mapRef.current || typeof L === 'undefined') return;
+    
+    if (mapInstance.current) {
+      mapInstance.current.remove();
+      mapInstance.current = null;
+    }
+    
+    const map = L.map(mapRef.current, {
+      center: [20, 0],
+      zoom: 2,
+      zoomControl: false,
+      attributionControl: false
+    });
+    
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      subdomains: 'abcd',
+      maxZoom: 19
+    }).addTo(map);
+    
+    L.control.attribution({ position: 'bottomright', prefix: false }).addAttribution('© OpenStreetMap © CARTO').addTo(map);
+    
+    mapInstance.current = map;
+    
+    const getMarkerClass = (regionId) => {
+      const regionMonitors = monitors.filter(m => m.locations?.includes(regionId));
+      if (regionMonitors.length === 0) return 'none';
+      
+      const downCount = regionMonitors.filter(m => m.status === 'down').length;
+      const slowCount = regionMonitors.filter(m => m.status === 'slow').length;
+      
+      if (downCount > 0) return 'down';
+      if (slowCount > 0) return 'slow';
+      return 'up';
+    };
+    
+    MONITORING_REGIONS.forEach(region => {
+      const markerClass = getMarkerClass(region.id);
+      const isPro = region.plan === 'pro';
+      
+      const icon = L.divIcon({
+        className: 'pg-marker ' + markerClass + (isPro ? ' pro' : ''),
+        html: `<div class="pg-marker-ring"></div><div class="pg-marker-dot"></div>${isPro ? '<div class="pg-marker-label">' + region.flag + ' PRO</div>' : ''}`,
+        iconSize: [44, 44],
+        iconAnchor: [22, 22]
+      });
+      
+      const marker = L.marker([region.lat, region.lon], { icon }).addTo(map);
+      
+      const regionMonitors = monitors.filter(m => m.locations?.includes(region.id));
+      const downMons = regionMonitors.filter(m => m.status === 'down');
+      const slowMons = regionMonitors.filter(m => m.status === 'slow');
+      const upMons = regionMonitors.filter(m => !m.status || m.status === 'up' || m.status === 'pending');
+      const avgResponse = regionMonitors.length > 0 
+        ? Math.round(regionMonitors.reduce((a, m) => a + (m.avgResponseMs || 0), 0) / regionMonitors.length) 
+        : 0;
+      
+      let popupContent = '';
+      
+      if (isPro) {
+        popupContent = `
+          <div class="pg-popup">
+            <div class="pg-popup-title">${region.flag} ${region.name}, ${region.country} 🔒</div>
+            <div class="pg-popup-pro">
+              <p style="color: #6B6B8A; font-size: 11px;">Available on Pro plan</p>
+              <p style="color: #6B6B8A; font-size: 11px; margin-top: 4px;">Monitor your APIs from Southeast Asia</p>
+              <button class="pg-popup-pro-btn" onclick="window.navigateToBilling && window.navigateToBilling()">Upgrade to Pro</button>
+            </div>
+          </div>
+        `;
+      } else if (regionMonitors.length === 0) {
+        popupContent = `
+          <div class="pg-popup">
+            <div class="pg-popup-title">${region.flag} ${region.name}, ${region.country}</div>
+            <div style="color: #6B6B8A; font-size: 12px;">No monitors checking from here yet.</div>
+            <div style="color: #00F5FF; font-size: 11px; margin-top: 8px;">Add this location to start monitoring.</div>
+          </div>
+        `;
+      } else {
+        let rows = '';
+        [...upMons, ...slowMons, ...downMons].forEach(m => {
+          const statusClass = m.status === 'down' ? 'down' : m.status === 'slow' ? 'slow' : 'up';
+          const statusIcon = m.status === 'down' ? '❌' : m.status === 'slow' ? '🟡' : '✅';
+          rows += `<div class="pg-popup-row ${statusClass}"><span>${statusIcon} ${m.name.substring(0, 20)}</span><span>${m.avgResponseMs || '—'}ms</span></div>`;
+        });
+        
+        popupContent = `
+          <div class="pg-popup">
+            <div class="pg-popup-title">${region.flag} ${region.name}, ${region.country}</div>
+            <div style="border-bottom: 1px solid #1A1A2E; margin: 8px 0;"></div>
+            <div style="font-size: 12px; color: #E8E8F0;">${regionMonitors.length} monitors checking</div>
+            <div style="margin-top: 8px;">${rows}</div>
+            <div class="pg-popup-stats">
+              <div>Avg response: ${avgResponse}ms</div>
+              <div>Last checked: ${new Date().toLocaleTimeString()}</div>
+            </div>
+          </div>
+        `;
+      }
+      
+      marker.bindPopup(popupContent, { className: 'pg-popup-wrapper' });
+      markersRef.current[region.id] = marker;
+    });
+    
+    return () => {
+      if (mapInstance.current) {
+        mapInstance.current.remove();
+        mapInstance.current = null;
+      }
+    };
+  }, [monitors, userData]);
+  
+  return <div ref={mapRef} className="pulsegrid-map rounded-lg"></div>;
+};
 
 // Deep Monitoring Checks - 8 comprehensive checks per monitor
 const LOCATION_NAMES = {
@@ -1009,25 +1130,9 @@ const Dashboard = () => {
         </div>
       )}
 <div className="card-glass p-6">
-          <div className="flex items-center justify-between mb-4"><h3 className="font-bold">🌍 Global Monitoring Map</h3><span className="text-xs text-gray-500">12 server locations worldwide</span></div>
-          <div className="relative bg-gray-900 rounded-lg overflow-hidden" style={{ height: '280px', background: 'linear-gradient(180deg, #0a1628 0%, #0f2847 100%)' }}>
-            <svg viewBox="0 0 1000 400" className="w-full h-full absolute inset-0" style={{ opacity: 0.3 }}>
-              <path d="M150,120 Q200,80 280,90 T380,100 T480,80 T580,90 T680,70 T780,85 T880,75 T950,85" fill="none" stroke="#1e3a5f" strokeWidth="2"/>
-              <path d="M100,200 Q200,180 300,200 T500,190 T700,210 T900,200" fill="none" stroke="#1e3a5f" strokeWidth="2"/>
-              <path d="M120,280 Q250,250 400,270 T650,260 T850,280" fill="none" stroke="#1e3a5f" strokeWidth="2"/>
-              <ellipse cx="500" cy="200" rx="400" ry="150" fill="none" stroke="#00F5FF" strokeWidth="0.5" strokeDasharray="5,5"/>
-            </svg>
-            <div className="relative z-10 grid grid-cols-4 gap-2 p-4 h-full">
-              {MONITORING_REGIONS.slice(0, 12).map(r => (
-                <div key={r.id} className="flex items-center gap-2 p-2 bg-white/5 rounded-lg backdrop-blur-sm">
-                  <div className="text-xl">{r.flag}</div>
-                  <div><div className="text-xs font-medium">{r.name}</div><div className="text-[10px] text-gray-500">{r.country}</div></div>
-                </div>
-              ))}
-            </div>
-            <div className="absolute bottom-2 left-4 right-4 flex justify-between text-xs text-gray-500">
-              <span>🌐 Africa</span><span>🌐 Europe</span><span>🌐 Americas</span><span>🌐 Asia Pacific</span>
-            </div>
+          <div className="flex items-center justify-between mb-4"><h3 className="font-bold">🌍 Global Monitoring Map</h3><span className="text-xs text-gray-500">Click markers to see details</span></div>
+          <div className="relative bg-gray-900 rounded-lg overflow-hidden" style={{ height: '350px' }}>
+            <LeafletMap monitors={monitors} userData={userData} />
           </div>
         </div>
         <div className="card-glass p-6">
