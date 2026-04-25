@@ -283,7 +283,8 @@ const EmailVerificationScreen = ({ onResend, onContinue, onBack, resendCooldown 
         <h2 className="text-2xl font-bold mb-4">Verify Your Email</h2>
         <p className="text-gray-400 mb-2">We sent a verification link to</p>
         <p className="text-cyan-400 font-medium mb-6">{auth.currentUser?.email}</p>
-        <p className="text-sm text-gray-500 mb-8">Click the link in your email to activate your account.</p>
+        <p className="text-sm text-gray-500 mb-2">Click the link in your email to activate your account.</p>
+        <p className="text-xs text-amber-400 mb-8">📧 Also check your spam/junk folder if you don't see it within a few minutes.</p>
         <div className="space-y-3">
           <button onClick={onResend} disabled={resendCooldown > 0} className="btn-ghost w-full py-3">
             {resendCooldown > 0 ? `Resend Email (${resendCooldown}s)` : 'Resend Email'}
@@ -393,9 +394,15 @@ const AuthPage = ({ initialTab }) => {
     try {
       await auth.sendPasswordResetEmail(email);
       setForgotSent(true);
-      toast('success', 'Password reset email sent to ' + email);
+      setMessage('Password reset email sent! Check your inbox (and spam folder).');
     } catch (error) {
-      toast('error', 'Failed to send reset email');
+      console.error('Password reset error:', error);
+      let msg = 'Failed to send reset email';
+      if (error.code === 'auth/user-not-found') msg = 'No account with this email exists';
+      else if (error.code === 'auth/invalid-email') msg = 'Invalid email address';
+      else if (error.code === 'auth/too-many-requests') msg = 'Too many attempts. Try again later';
+      toast('error', msg);
+      setMessage('');
     }
     setLoading(false);
   };
@@ -409,7 +416,8 @@ const AuthPage = ({ initialTab }) => {
           {forgotSent ? (
             <div className="text-center">
               <div className="text-cyan-400 mb-4 flex justify-center">{ICONS.mail}</div>
-              <p className="text-gray-400 mb-6">Check your inbox for a reset link.</p>
+              <p className="text-gray-400 mb-2">Check your inbox (and spam folder) for the reset link.</p>
+              <p className="text-xs text-amber-400 mb-6">📧 Also check your spam/junk folder if you don't see it within a few minutes.</p>
               <button onClick={() => { setShowForgot(false); setForgotSent(false); setTab('login'); }} className="btn-primary w-full py-3">Back to Login</button>
             </div>
           ) : (
