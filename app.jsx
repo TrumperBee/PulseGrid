@@ -37,106 +37,22 @@ if (typeof firebase !== 'undefined') {
   db = firebase.firestore();
 }
 
-// Email utility - sends alerts via Resend API directly from browser
-const sendAlertEmail = async (monitor, eventType, details = {}) => {
-  if (!monitor.alertContacts || monitor.alertContacts.length === 0) return;
-  
-  const RESEND_API_KEY = 're_Hy1TH7nk_EhqPzuus64koJmTbnqvGKebr';
-  const { title, description, affectedLocations, workingLocations, checkResults } = details;
-  
-  let subjectLine = eventType === 'down' ? '🚨 ALERT: ' + monitor.name + ' is DOWN' : '✅ RECOVERED: ' + monitor.name + ' is back up';
-  if (title) {
-    const shortTitle = title.length > 50 ? title.substring(0, 47) + '...' : title;
-    subjectLine = eventType === 'down' ? '🚨 ' + monitor.name + ' ' + shortTitle + ' — PulseGrid Alert' : '✅ ' + monitor.name + ' recovered — PulseGrid Alert';
-  }
-  
-  const failedChecks = [];
-  const passedChecks = [];
-  const checks = checkResults || {};
-  
-  if (checks.connectivity?.passed === false) failedChecks.push('Connectivity — ' + (checks.connectivity.error || 'Failed'));
-  if (checks.fullLoad?.passed === false) failedChecks.push('Full Page Load — ' + (checks.fullLoad.error || 'Failed'));
-  if (checks.contentValidation?.passed === false) failedChecks.push('Content — ' + (checks.contentValidation.issues?.join('; ') || 'Failed'));
-  if (checks.linkValidation?.broken > 0) failedChecks.push('Links — ' + checks.broken + ' of ' + checks.checked + ' broken');
-  if (checks.ssl?.valid === false || checks.ssl?.daysUntilExpiry < 30) failedChecks.push('SSL — ' + (checks.ssl.daysUntilExpiry < 30 ? 'Expiring in ' + checks.ssl.daysUntilExpiry + ' days' : 'Invalid'));
-  if (checks.dns?.resolved === false) failedChecks.push('DNS — ' + (checks.dns.error || 'Failed'));
-  
-  if (checks.connectivity?.passed !== false) passedChecks.push('Connectivity');
-  if (checks.fullLoad?.passed !== false) passedChecks.push('Full Page Load');
-  if (checks.contentValidation?.passed !== false) passedChecks.push('Content');
-  if (checks.linkValidation) passedChecks.push('Links');
-  if (checks.ssl?.valid !== false) passedChecks.push('SSL');
-  if (checks.dns?.resolved !== false) passedChecks.push('DNS');
-  
-  let actionSuggestions = '';
-  if (eventType === 'down') {
-    const errorType = checks.connectivity?.error || checks.fullLoad?.error || checks.dns?.error || '';
-    if (errorType.includes('Timeout')) {
-      actionSuggestions = '<p style="margin-top: 15px;"><strong>What to do:</strong></p><ul style="color: #aaa; margin: 5px 0;"><li>Check if your server is running</li><li>Log into your hosting dashboard and verify the service is active</li><li>Check firewall settings allow external requests</li></ul>';
-    } else if (checks.dns?.error) {
-      actionSuggestions = '<p style="margin-top: 15px;"><strong>What to do:</strong></p><ul style="color: #aaa; margin: 5px 0;"><li>Check your domain registration has not expired</li><li>Verify your DNS records are correctly configured</li><li>Check your domain provider settings</li></ul>';
-    } else if (checks.ssl?.error || checks.ssl?.daysUntilExpiry < 30) {
-      actionSuggestions = '<p style="margin-top: 15px;"><strong>What to do:</strong></p><ul style="color: #aaa; margin: 5px 0;"><li>Renew your SSL certificate immediately</li><li>Use Let\'s Encrypt (free) at letsencrypt.org</li><li>Or buy from other providers like DigiCert</li></ul>';
-    } else if (checks.fullLoad?.statusCode >= 500) {
-      actionSuggestions = '<p style="margin-top: 15px;"><strong>What to do:</strong></p><ul style="color: #aaa; margin: 5px 0;"><li>Check your server logs for crash details</li><li>Your application may have encountered an unhandled error</li><li>Restart your server or service</li></ul>';
-    } else if (checks.contentValidation?.issues?.length) {
-      actionSuggestions = '<p style="margin-top: 15px;"><strong>What to do:</strong></p><ul style="color: #aaa; margin: 5px 0;"><li>Your server is running but returning unexpected content</li><li>Check recent deployments or configuration changes</li><li>Verify your application is serving the correct pages</li></ul>';
-    } else {
-      actionSuggestions = '<p style="margin-top: 15px;"><strong>What to do:</strong></p><ul style="color: #aaa; margin: 5px 0;"><li>Check your server status</li><li>Review recent changes to your application</li><li>Check hosting provider status</li></ul>';
-    }
-  }
-  
-  let locationTable = '';
-  if (affectedLocations || workingLocations) {
-    locationTable = '<div style="margin-top: 20px;"><h3 style="color: #E8E8F0;">Affected Locations</h3><table style="width: 100%; border-collapse: collapse;"><tr>';
-    if (affectedLocations) locationTable += '<td style="color: #ff6b6b; padding: 8px;">❌ ' + affectedLocations + '</td>';
-    locationTable += '</tr></table></div>';
-    if (workingLocations) {
-      locationTable += '<div style="margin-top: 10px;"><h4 style="color: #aaa;">Working Locations</h4><p style="color: #6b6;">✅ ' + workingLocations + '</p></div>';
-    }
-  }
-  
-  let checksTable = '';
-  if (failedChecks.length > 0 || passedChecks.length > 0) {
-    checksTable = '<div style="margin-top: 20px;"><h3 style="color: #E8E8F0;">Check Results</h3><table style="width: 100%; border-collapse: collapse;">';
-    failedChecks.forEach(c => { checksTable += '<tr><td style="color: #ff6b6b; padding: 5px;">❌ ' + c + '</td></tr>'; });
-    passedChecks.forEach(c => { checksTable += '<tr><td style="color: #6b6; padding: 5px;">✅ ' + c + '</td></tr>'; });
-    checksTable += '</table></div>';
-  }
-  
-  const htmlContent = '<div style="font-family: Arial, sans-serif; background: #050508; color: #E8E8F0; padding: 20px;"><div style="max-width: 600px; margin: 0 auto; background: #0D0D18; border-radius: 12px; padding: 30px;">' +
-    '<h1 style="color: ' + (eventType === 'down' ? '#ff6b6b' : '#6b6') + ';">' + (eventType === 'down' ? '🚨 Monitor Down!' : '✅ Monitor Recovered!') + '</h1>' +
-    (description ? '<p style="color: #E8E8F0; margin-top: 15px; font-size: 16px;">' + description + '</p>' : '') +
-    '<p style="margin-top: 15px;"><strong>Monitor:</strong> ' + monitor.name + '</p>' +
-    '<p><strong>URL:</strong> ' + monitor.url + '</p>' +
-    '<p><strong>Time:</strong> ' + new Date().toLocaleString() + '</p>' +
-    locationTable + checksTable +
-    actionSuggestions +
-    '<a href="https://pulsegrid.vercel.app" style="display: inline-block; background: #00F5FF; color: #000; padding: 12px 24px; border-radius: 8px; text-decoration: none; margin-top: 20px;">View in PulseGrid</a></div></div>';
-  
-  try {
-    await fetch('https://corsproxy.io/?https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + RESEND_API_KEY,
-        'X-Requested-With': 'XMLHttpRequest'
-      },
-      body: JSON.stringify({
-        from: 'PulseGrid Alerts <alerts@resend.dev>',
-        to: monitor.alertContacts,
-        subject: subjectLine,
-        html: htmlContent
-      })
-    });
-    console.log('Alert sent:', eventType, monitor.name);
-  } catch (err) {
-    console.error('Failed to send alert email:', err);
-  }
+// Server-side monitoring API (Cloud Functions). No secrets in the browser —
+// auth is a Firebase ID token; the Resend key lives only in Cloud Functions secrets.
+const MONITORING_API_URL = 'https://us-central1-pulsegrid-f5631.cloudfunctions.net/api';
+const callMonitoringApi = async (payload) => {
+  if (!auth?.currentUser) throw new Error('Not signed in');
+  const token = await auth.currentUser.getIdToken();
+  const res = await fetch(MONITORING_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ('API error ' + res.status));
+  return data;
 };
 
-// Context for toast
-const ToastContext = createContext();
 const useToast = () => useContext(ToastContext);
 
 // Context for navigation
@@ -304,456 +220,20 @@ const LeafletMap = ({ monitors = [], userData }) => {
   return <div ref={mapRef} className="pulsegrid-map rounded-lg"></div>;
 };
 
-// Deep Monitoring Checks - 8 comprehensive checks per monitor
-const LOCATION_NAMES = {
-  nairobi: { name: 'Nairobi, Kenya', region: 'Africa', country: 'KE' },
-  frankfurt: { name: 'Frankfurt, Germany', region: 'Europe', country: 'DE' },
-  newyork: { name: 'New York, USA', region: 'North America', country: 'US' },
-  london: { name: 'London, UK', region: 'Europe', country: 'GB' },
-  singapore: { name: 'Singapore', region: 'Asia', country: 'SG' },
-  tokyo: { name: 'Tokyo, Japan', region: 'Asia', country: 'JP' },
-  sydney: { name: 'Sydney, Australia', region: 'Oceania', country: 'AU' },
-  saopaulo: { name: 'São Paulo, Brazil', region: 'South America', country: 'BR' },
-  mumbai: { name: 'Mumbai, India', region: 'Asia', country: 'IN' },
-  dubai: { name: 'Dubai, UAE', region: 'Middle East', country: 'AE' },
-  amsterdam: { name: 'Amsterdam, Netherlands', region: 'Europe', country: 'NL' },
-  toronto: { name: 'Toronto, Canada', region: 'North America', country: 'CA' }
-};
-
-const ERROR_INDICATORS = ['404 not found', '500 internal server error', 'service unavailable', 'access denied', 'forbidden', 'under maintenance', 'coming soon', 'error 503', 'bad gateway', 'gateway timeout'];
-
-// CHECK 1: Basic Connectivity (HEAD request)
-const runConnectivityCheck = async (url, timeout) => {
-  const start = Date.now();
-  try {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeout);
-    await fetch('https://corsproxy.io/?' + encodeURIComponent(url), { method: 'HEAD', signal: controller.signal });
-    clearTimeout(id);
-    return { passed: true, responseTimeMs: Date.now() - start, statusCode: null, error: null };
-  } catch (e) {
-    return { passed: false, responseTimeMs: Date.now() - start, statusCode: null, error: e.name === 'AbortError' ? 'Timeout' : e.message };
-  }
-};
-
-// CHECK 2: Full Page Load (GET request)
-const runFullLoadCheck = async (url, timeout, monitor) => {
-  const start = Date.now();
-  try {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeout);
-    const response = await fetch('https://corsproxy.io/?' + encodeURIComponent(url), {
-      method: monitor.method || 'GET',
-      signal: controller.signal,
-      headers: monitor.headers || {}
-    });
-    clearTimeout(id);
-    const text = await response.text();
-    const responseSize = new Blob([text]).size;
-    const responseTime = Date.now() - start;
-    
-    let passed = response.ok;
-    let error = null;
-    if (monitor.expectedStatusCode && response.status !== monitor.expectedStatusCode) {
-      passed = false;
-      error = `Expected ${monitor.expectedStatusCode}, got ${response.status}`;
-    }
-    return { passed, responseTimeMs: responseTime, responseSizeBytes: responseSize, statusCode: response.status, error, responseBody: text };
-  } catch (e) {
-    return { passed: false, responseTimeMs: Date.now() - start, responseSizeBytes: 0, statusCode: null, error: e.name === 'AbortError' ? 'Timeout' : e.message, responseBody: '' };
-  }
-};
-
-// CHECK 3: Content Validation
-const runContentValidationCheck = (responseBody) => {
-  if (!responseBody || !responseBody.trim()) return { passed: false, issues: ['Empty response body'] };
-  const issues = [];
-  let htmlValid = false;
-  let jsonValid = false;
-  let hasTitle = false;
-  
-  const lower = responseBody.toLowerCase();
-  const hasHtml = lower.includes('<html') && lower.includes('<body');
-  const hasJson = (responseBody.trim().startsWith('{') || responseBody.trim().startsWith('['));
-  
-  if (lower.includes('<!doctype html') || hasHtml) htmlValid = true;
-  if (hasJson) {
-    try { JSON.parse(responseBody); jsonValid = true; } catch {}
-  }
-  
-  if (!htmlValid && !jsonValid && !lower.includes('<!doctype')) {
-    issues.push('Response does not appear to be valid HTML or JSON');
-  }
-  
-  const titleMatch = responseBody.match(/<title[^>]*>([^<]+)<\/title>/i);
-  if (titleMatch && titleMatch[1]?.trim()) hasTitle = true;
-  if (htmlValid && !hasTitle) issues.push('Page has no title tag');
-  
-  for (const indicator of ERROR_INDICATORS) {
-    if (lower.includes(indicator)) {
-      issues.push(`Error page indicator detected: "${indicator}"`);
-      break;
-    }
-  }
-  
-  return { passed: issues.length === 0, issues, htmlValid, jsonValid, hasTitle };
-};
-
-// CHECK 4: Link Validation (internal links)
-const runLinkValidationCheck = async (baseUrl, responseBody, timeout) => {
-  const domain = new URL(baseUrl).hostname;
-  const linkRegex = /href=["'](https?:\/\/[^"']+)["']/gi;
-  const linkMatches = responseBody.match(linkRegex) || [];
-  const internalLinks = [];
-  linkMatches.forEach(m => {
-    const match = m.match(/href=["'](https?:\/\/[^"']+)["']/);
-    if (match && match[1] && match[1].includes(domain)) internalLinks.push(match[1]);
-  });
-  const uniqueLinks = [...new Set(internalLinks)].slice(0, 10);
-  
-  if (uniqueLinks.length === 0) return { checked: 0, broken: 0, brokenUrls: [] };
-  
-  const brokenUrls = [];
-  for (const link of uniqueLinks) {
-    try {
-      const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), timeout / uniqueLinks.length);
-      const res = await fetch('https://corsproxy.io/?' + encodeURIComponent(link), { method: 'HEAD', signal: controller.signal });
-      clearTimeout(id);
-      if (res.status >= 400) brokenUrls.push(link);
-    } catch { brokenUrls.push(link); }
-  }
-  
-  const broken = brokenUrls.length;
-  const checked = uniqueLinks.length;
-  return { checked, broken, brokenUrls, passRatio: checked > 0 ? (checked - broken) / checked : 1 };
-};
-
-// CHECK 5: SSL Certificate Check
-const runSSLCheck = async (url) => {
-  try {
-    const hostname = new URL(url).hostname;
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 10000);
-    const response = await fetch('https://corsproxy.io/?' + encodeURIComponent('https://api.sslmap.com/v1/scan?hostname=' + hostname), { signal: controller.signal });
-    clearTimeout(id);
-    if (!response.ok) return { valid: null, daysUntilExpiry: null, issuer: null, error: 'SSL check service unavailable' };
-    const data = await response.json();
-    return { valid: data.valid, daysUntilExpiry: data.daysUntilExpiry, issuer: data.issuer, error: null };
-  } catch {
-    return { valid: null, daysUntilExpiry: null, issuer: null, error: 'Could not verify SSL' };
-  }
-};
-
-// CHECK 6: DNS Check
-const runDNSCheck = async (url) => {
-  const start = Date.now();
-  try {
-    const hostname = new URL(url).hostname;
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 5000);
-    const response = await fetch('https://corsproxy.io/?' + encodeURIComponent('https://dns.google/resolve?name=' + hostname + '&type=A'), { signal: controller.signal });
-    clearTimeout(id);
-    const data = await response.json();
-    const ip = data.Answer?.[0]?.data;
-    return { resolved: !!ip, resolutionTimeMs: Date.now() - start, ipAddress: ip, error: ip ? null : 'DNS resolution failed' };
-  } catch (e) {
-    return { resolved: false, resolutionTimeMs: Date.now() - start, ipAddress: null, error: e.message };
-  }
-};
-
-// CHECK 7: Redirect Check
-const runRedirectCheck = async (url, timeout) => {
-  try {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeout);
-    const response = await fetch('https://corsproxy.io/?' + encodeURIComponent(url), { method: 'GET', redirect: 'manual', signal: controller.signal });
-    clearTimeout(id);
-    const chain = [url];
-    let current = response.url;
-    if (current !== url && current) chain.push(current);
-    
-    const https = url.startsWith('https://');
-    const httpsRedirect = !https && response.status >= 300 && response.status < 400 && response.headers.get('location')?.startsWith('https');
-    
-    return { chain, finalUrl: current, hopCount: chain.length, isHttps: https || !!httpsRedirect };
-  } catch {
-    return { chain: [url], finalUrl: url, hopCount: 0, isHttps: url.startsWith('https://') };
-  }
-};
-
-// CHECK 8: Performance Scoring
-const calculatePerformanceScore = (checks) => {
-  let score = 0;
-  const { connectivity, fullLoad, ssl, linkValidation, dns } = checks;
-  
-  if (fullLoad?.responseTimeMs < 200) score += 25;
-  else if (fullLoad?.responseTimeMs < 500) score += 15;
-  else if (fullLoad?.responseTimeMs < 1000) score += 5;
-  
-  if (ssl?.valid === true && ssl?.daysUntilExpiry > 30) score += 20;
-  else if (ssl?.valid === true) score += 10;
-  
-  if (linkValidation?.passRatio >= 0.7) score += 20;
-  
-  if (checks.contentValidation?.passed) score += 20;
-  
-  if (dns?.resolutionTimeMs < 50) score += 15;
-  else if (dns?.resolved) score += 5;
-  
-  let grade = 'F';
-  if (score >= 90) grade = 'A';
-  else if (score >= 75) grade = 'B';
-  else if (score >= 60) grade = 'C';
-  else if (score >= 40) grade = 'D';
-  
-  return { score, grade };
-};
-
-// Calculate overall status from all checks
-const calculateOverallStatus = (checks, prevStatus) => {
-  const { connectivity, fullLoad, contentValidation, ssl, linkValidation } = checks;
-  
-  if (connectivity?.error === 'Timeout' || fullLoad?.error === 'Timeout') return 'down';
-  if (!connectivity?.passed || !fullLoad?.passed) return 'down';
-  if (contentValidation?.issues?.some(i => ERROR_INDICATORS.some(e => i.toLowerCase().includes(e)))) return 'degraded';
-  if (ssl?.daysUntilExpiry < 7) return 'critical_warning';
-  if (ssl?.daysUntilExpiry < 30) return 'warning';
-  if (linkValidation?.passRatio < 0.7) return 'degraded';
-  if (fullLoad?.responseTimeMs > 1000) return 'slow';
-  return 'up';
-};
-
-// Generate human-readable incident description
-const generateIncidentDescription = (monitorName, location, checkResults) => {
-  const { checks: c, locationInfo } = checkResults;
-  const locName = locationInfo?.name || location;
-  const errors = [];
-  if (c.connectivity?.error) errors.push('connectivity: ' + c.connectivity.error);
-  if (c.fullLoad?.error) errors.push('load: ' + c.fullLoad.error);
-  if (c.dns?.error) errors.push('dns: ' + c.dns.error);
-  if (c.contentValidation?.issues?.length) errors.push('content: ' + c.contentValidation.issues.join('; '));
-  if (c.linkValidation?.broken > 0) errors.push('broken links: ' + c.linkValidation.broken + ' of ' + c.linkValidation.checked);
-  if (c.ssl?.error) errors.push('ssl: ' + c.ssl.error);
-  if (c.ssl?.daysUntilExpiry < 30) errors.push('ssl expiring in ' + c.ssl.daysUntilExpiry + ' days');
-  
-  const error = errors.join('; ') || 'Unknown error';
-  
-  if (c.connectivity?.error === 'Timeout' || c.fullLoad?.error === 'Timeout') {
-    return {
-      title: `${monitorName} is unreachable from ${locName}`,
-      description: `${monitorName} is completely unreachable from ${locName}. The server is not responding to any requests. This means ${locationInfo?.region} users cannot access this service at all. Technical: Connection timed out after 30 seconds — no response received.`,
-      type: 'timeout'
-    };
-  }
-  
-  if (c.dns?.error) {
-    return {
-      title: `${monitorName} domain not found from ${locName}`,
-      description: `${monitorName} cannot be found from ${locName}. The domain name is not resolving to an IP address. This could mean the domain has expired or DNS is misconfigured. Technical: DNS lookup failed — ${c.dns.error}`,
-      type: 'dns'
-    };
-  }
-  
-  if (c.fullLoad?.statusCode && c.fullLoad.statusCode >= 400) {
-    const explanations = { 401: 'Authentication required', 403: 'Access forbidden', 404: 'Page not found', 500: 'Server crashed', 502: 'Bad gateway', 503: 'Service unavailable' };
-    return {
-      title: `${monitorName} returning HTTP ${c.fullLoad.statusCode} from ${locName}`,
-      description: `${monitorName} is returning an error page from ${locName}. The server responded with HTTP ${c.fullLoad.statusCode} instead of ${checkResults.expectedStatus || 200}. ${explanations[c.fullLoad.statusCode] || 'Server error'}. Technical: Expected ${checkResults.expectedStatus || 200}, received ${c.fullLoad.statusCode}`,
-      type: 'http_error'
-    };
-  }
-  
-  if (c.contentValidation?.issues?.length) {
-    return {
-      title: `${monitorName} content issues from ${locName}`,
-      description: `${monitorName} is loading but has content issues from ${locName}. The page loaded but failed validation: ${c.contentValidation.issues.join('; ')}. Technical: Content validation failed — ${c.contentValidation.issues.join(', ')}`,
-      type: 'content'
-    };
-  }
-  
-  if (c.linkValidation?.broken > 0) {
-    return {
-      title: `${monitorName} has broken pages from ${locName}`,
-      description: `${monitorName} has multiple broken pages detected from ${locName}. ${c.linkValidation.broken} out of ${c.linkValidation.checked} internal pages are returning errors. Affected: ${c.linkValidation.brokenUrls.slice(0, 3).join(', ')}`,
-      type: 'links'
-    };
-  }
-  
-  if (c.ssl?.daysUntilExpiry < 30) {
-    return {
-      title: `${monitorName} SSL certificate ${c.ssl.daysUntilExpiry < 7 ? 'expired' : 'expiring soon'}`,
-      description: `${monitorName} has an SSL certificate problem. Certificate ${c.ssl.daysUntilExpiry < 7 ? 'expired' : 'expires in ' + c.ssl.daysUntilExpiry + ' days'}. Users will see security warnings. Technical: SSL ${c.ssl.daysUntilExpiry < 7 ? 'expired' : 'expiring soon'} — issuer: ${c.ssl.issuer || 'unknown'}`,
-      type: 'ssl'
-    };
-  }
-  
-  if (c.fullLoad?.responseTimeMs > 1000) {
-    return {
-      title: `${monitorName} responding slowly from ${locName}`,
-      description: `${monitorName} is responding slowly from ${locName}. The page is taking ${c.fullLoad.responseTimeMs}ms to load. Users in ${locationInfo?.region} are experiencing slow load times. Technical: Response time ${c.fullLoad.responseTimeMs}ms > 1000ms threshold`,
-      type: 'slow'
-    };
-  }
-  
-  return {
-    title: `${monitorName} ${error} from ${locName}`,
-    description: `${monitorName} has an issue from ${locName}: ${error}. Technical: ${error}`,
-    type: 'unknown'
-  };
-};
-
-// Check a single monitor with all 8 checks
-const checkMonitor = async (monitor, regionId = 'nairobi') => {
-  const timeout = monitor.timeoutSeconds ? monitor.timeoutSeconds * 1000 : 15000;
-  const locationInfo = LOCATION_NAMES[regionId];
-  
-  const checks = {
-    connectivity: null,
-    fullLoad: null,
-    contentValidation: null,
-    linkValidation: null,
-    ssl: null,
-    dns: null,
-    redirects: null,
-    performance: null
-  };
-  
-  try {
-    checks.connectivity = await runConnectivityCheck(monitor.url, timeout);
-    checks.fullLoad = await runFullLoadCheck(monitor.url, timeout, monitor);
-    
-    if (checks.fullLoad?.responseBody) {
-      checks.contentValidation = runContentValidationCheck(checks.fullLoad.responseBody);
-      checks.linkValidation = await runLinkValidationCheck(monitor.url, checks.fullLoad.responseBody, timeout);
-    }
-    
-    checks.ssl = await runSSLCheck(monitor.url);
-    checks.dns = await runDNSCheck(monitor.url);
-    checks.redirects = await runRedirectCheck(monitor.url, timeout);
-    checks.performance = calculatePerformanceScore(checks);
-  } catch (e) {
-    console.error('Check error:', e);
-  }
-  
-  const overallStatus = calculateOverallStatus(checks, monitor.status);
-  
-  return {
-    passed: overallStatus === 'up',
-    status: overallStatus,
-    responseTimeMs: checks.fullLoad?.responseTimeMs || checks.connectivity?.responseTimeMs,
-    checks,
-    locationInfo,
-    expectedStatus: monitor.expectedStatusCode,
-    location: regionId
-  };
-};
-
-// Check all monitors and update Firestore with deep checks
-const checkAllMonitors = async (monitorsList, userId) => {
-  const batch = db.batch();
-  let downCount = 0;
-  let totalResponse = 0;
-  const now = new Date();
-  
-  for (const m of monitorsList) {
-    const regions = m.locations || ['nairobi'];
-    const regionResults = {};
-    let overallStatus = 'up';
-    let anyDown = false;
-    let anyRegional = false;
-    
-    for (const region of regions) {
-      const result = await checkMonitor(m, region);
-      regionResults[region] = result;
-      
-      if (result.status === 'down') anyDown = true;
-      else if (result.status !== 'up') anyRegional = true;
-      if (result.status !== 'up' && overallStatus === 'up') overallStatus = result.status;
-    }
-    
-    const avgResponseTime = Math.round(
-      Object.values(regionResults).filter(r => r).reduce((a, r) => a + (r.responseTimeMs || 0), 0) / regions.length
-    );
-    
-    const failedChecks = Object.entries(regionResults).filter(([_, r]) => r?.status !== 'up');
-    const workingChecks = Object.entries(regionResults).filter(([_, r]) => r?.status === 'up');
-    
-    if (anyDown && m.status !== 'down') {
-      const failedRegions = failedChecks.map(([r]) => LOCATION_NAMES[r]?.name || r).join(', ');
-      const incidentDesc = failedChecks[0]?.[1]?.checks ? generateIncidentDescription(m.name, failedRegions, { checks: failedChecks[0][1]?.checks, locationInfo: failedChecks[0][1]?.locationInfo, expectedStatus: m.expectedStatusCode }) : { title: `${m.name} is down`, description: `Monitor down from ${failedRegions}` };
-      
-      await db.collection('incidents').add({
-        monitorId: m.id,
-        monitorName: m.name,
-        userId,
-        title: incidentDesc.title,
-        description: incidentDesc.description,
-        incidentType: incidentDesc.type,
-        isResolved: false,
-        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-        affectedLocations: failedRegions,
-        workingLocations: workingChecks.map(([r]) => LOCATION_NAMES[r]?.name || r).join(', '),
-        checkResults: regionResults,
-        timeline: [{ time: now, event: 'Incident created', detail: 'First failure detected' }]
-      });
-      
-      sendAlertEmail(m, 'down', {
-        title: incidentDesc.title,
-        description: incidentDesc.description,
-        affectedLocations: failedRegions,
-        workingLocations: workingChecks.map(([r]) => LOCATION_NAMES[r]?.name || r).join(', '),
-        checkResults: failedChecks[0]?.[1]?.checks
-      });
-    } else if (anyRegional && m.status === 'down') {
-      const existingIncidents = await db.collection('incidents').where('monitorId', '==', m.id).where('isResolved', '==', false).get();
-      if (!existingIncidents.empty) {
-        const inc = existingIncidents.docs[0];
-        const data = inc.data();
-        await db.collection('incidents').doc(inc.id).update({
-          isResolved: true,
-          resolvedAt: firebase.firestore.FieldValue.serverTimestamp(),
-          timeline: [...(data.timeline || []), { time: now, event: 'Recovered', detail: `Service recovered after being down` }]
-        });
-        
-        sendAlertEmail(m, 'recovered', {
-          title: `${m.name} has recovered`,
-          description: `The service is now responding normally in ${workingChecks.map(([r]) => LOCATION_NAMES[r]?.name || r).join(', ')} after being down.`,
-          affectedLocations: data.affectedLocations,
-          workingLocations: workingChecks.map(([r]) => LOCATION_NAMES[r]?.name || r).join(', ')
-        });
-      }
-    }
-    
-    if (anyDown) downCount++;
-    totalResponse += avgResponseTime;
-    
-    batch.update(db.collection('monitors').doc(m.id), {
-      status: overallStatus,
-      avgResponseMs: avgResponseTime,
-      lastCheck: firebase.firestore.FieldValue.serverTimestamp(),
-      lastError: failedChecks[0]?.[1]?.checks?.fullLoad?.error || failedChecks[0]?.[1]?.checks?.connectivity?.error,
-      checkHistory: [...(m.checkHistory || []).slice(-47), { time: now, status: overallStatus, responseTime: avgResponseTime, regions: regionResults }]
-    });
-  }
-  
-  await batch.commit();
-  return { downCount, avgResponse: monitorsList.length > 0 ? Math.round(totalResponse / monitorsList.length) : 0 };
-};
-
-// Code block helper to render JSON/curl without JSX conflicts
 const CodeBlock = ({ code, color = '#E8E8F0' }) => (
   <div className="p-4 bg-[#0A0A0F] border border-cyan-500/20 rounded-lg font-mono text-xs overflow-x-auto whitespace-pre" style={{ color }}>{code}</div>
 );
 
-// Generate chart data
-const generateChartData = () => {
-  const regions = ['Nairobi', 'Frankfurt', 'New York', 'London', 'Singapore', 'Tokyo', 'Sydney', 'São Paulo', 'Mumbai', 'Dubai', 'Amsterdam', 'Toronto'];
-  return Array.from({ length: 24 }, (_, i) => {
-    const data = { time: `${i}:00` };
-    regions.forEach(r => { data[r] = Math.floor(Math.random() * 200) + 80; });
-    return data;
-  });
+// Chart data derived ONLY from real check history (no random/fake points)
+const buildChartDataFromHistory = (monitors) => {
+  const history = [];
+  monitors.forEach(m => (m.checkHistory || []).forEach(h => history.push(h)));
+  history.sort((a, b) => new Date(a.time) - new Date(b.time));
+  return history.slice(-24).map(h => ({
+    time: new Date(h.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    response: h.responseTimeMs || 0,
+    status: h.status || 'unknown',
+  }));
 };
 
 // Spinner
@@ -1043,16 +523,14 @@ const Dashboard = () => {
   const monitorsRef = useRef([]);
 
   const handleCheck = async () => {
-    const mons = monitorsRef.current;
-    if (checking || mons.length === 0) return;
+    if (checking) return;
     setChecking(true);
     try {
-      const result = await checkAllMonitors(mons, auth.currentUser.uid);
-      setStats(prev => ({ ...prev, down: result.downCount, avgResponse: result.avgResponse }));
-      toast(result.downCount > 0 ? 'warning' : 'success', result.downCount > 0 ? `${result.downCount} monitor(s) down` : 'All monitors checked successfully');
+      const result = await callMonitoringApi({ action: 'checkAll' });
+      toast(result.down > 0 ? 'warning' : 'success', result.down > 0 ? `${result.down} monitor(s) down` : `All ${result.checked} monitor(s) checked`);
     } catch (err) { 
       console.error('Check failed:', err);
-      toast('error', 'Failed to check monitors');
+      toast('error', 'Failed to check monitors: ' + (err.message || ''));
     }
     setChecking(false);
   };
@@ -1070,7 +548,7 @@ const Dashboard = () => {
         const iSnap = await db.collection('incidents').where('userId', '==', auth.currentUser.uid).limit(10).get();
         setIncidents(iSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       } catch (err) { console.error('Error loading data:', err); }
-      setChartData(generateChartData());
+      setChartData(buildChartDataFromHistory(monitorsList));
       setLoading(false);
     };
     loadData();
@@ -1081,6 +559,7 @@ const Dashboard = () => {
       const up = monitorsList.filter(m => m.status === 'up' || m.status === 'pending' || !m.status).length;
       const down = monitorsList.filter(m => m.status === 'down').length;
       setStats(prev => ({ ...prev, total: monitorsList.length, up, down }));
+      setChartData(buildChartDataFromHistory(monitorsList));
     });
     return () => unsubscribe();
   }, []);
@@ -1298,7 +777,7 @@ const AddMonitorPage = () => {
         alertContacts: [formData.alertEmail, ...formData.additionalEmails].filter(Boolean),
         slackWebhook: formData.slackWebhook, discordWebhook: formData.discordWebhook,
         alertAfterFailures: formData.alertAfterFailures, recoveryNotification: formData.recoveryNotification,
-        tags: formData.tags, isActive: true, status: 'pending', isPaused: false, uptimePercentage: 100, avgResponseMs: 0, checkHistory: [],
+        tags: formData.tags, isActive: true, status: 'pending', isPaused: false, avgResponseMs: 0, checkHistory: [], uptimeChecksTotal: 0, uptimeChecksPassed: 0, uptimePercentage: null,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
       await runTerminal(['✅ First ping successful!']);
@@ -1325,8 +804,8 @@ const AddMonitorPage = () => {
         <div className="card-glass p-8">
           <div className="text-6xl mb-4">🎉</div>
           <h2 className="text-2xl font-bold mb-2" style={{ fontFamily: 'Syne' }}>Monitor Created!</h2>
-          <p className="text-gray-400 mb-2">PulseGrid is now watching <span className="text-cyan-400">{formData.name}</span> 24/7.</p>
-          <p className="text-gray-500 text-sm mb-6">You'll be alerted if it's down for more than 15 minutes.</p>
+          <p className="text-gray-400 mb-2">Monitor <span className="text-cyan-400">{formData.name}</span> created. The first server check will run within a minute.</p>
+          <p className="text-gray-500 text-sm mb-6">Alerts fire after {formData.alertAfterFailures || 3} consecutive failed checks.</p>
           <button onClick={() => navigate('dashboard')} className="btn-primary w-full py-3 mb-3">Go to Dashboard</button>
           <button onClick={() => { setShowSuccess(false); setStep(1); setFormData({ ...formData, name: '', url: '', method: 'GET', body: '', hasAuth: false, authValue: '', tags: [], alertEmail: auth.currentUser?.email || '', additionalEmails: [] }); }} className="btn-ghost w-full py-3">Add Another Monitor</button>
         </div>
@@ -1786,7 +1265,7 @@ const StatusPagesPage = () => {
   const [showHelp, setShowHelp] = useState(true);
   const [formData, setFormData] = useState({
     name: '', slug: '', customDomain: '', brandColor: '#00F5FF',
-    companyDescription: 'We monitor our systems 24/7 to ensure reliability. This page shows the real-time status of all our services.',
+    companyDescription: 'We monitor our systems continuously to ensure reliability. This page shows the real-time status of all our services.',
     supportEmail: '', website: '', twitter: '', discord: '',
     showResponseTimes: true, showUptimePercentage: true, showIncidentHistory: true, allowSubscriptions: true, darkMode: true,
     selectedMonitors: [], headerLinks: [], footerLinks: []
@@ -1799,7 +1278,7 @@ const StatusPagesPage = () => {
     return () => { unsubPages(); unsubMonitors(); };
   }, [navigate]);
 
-  const createNew = () => { setEditingPage({ id: null }); setFormData({ name: '', slug: '', customDomain: '', brandColor: '#00F5FF', companyDescription: 'We monitor our systems 24/7 to ensure reliability. This page shows the real-time status of all our services.', supportEmail: '', website: '', twitter: '', discord: '', showResponseTimes: true, showUptimePercentage: true, showIncidentHistory: true, allowSubscriptions: true, darkMode: true, selectedMonitors: [], headerLinks: [], footerLinks: [] }); };
+  const createNew = () => { setEditingPage({ id: null }); setFormData({ name: '', slug: '', customDomain: '', brandColor: '#00F5FF', companyDescription: 'We monitor our systems continuously to ensure reliability. This page shows the real-time status of all our services.', supportEmail: '', website: '', twitter: '', discord: '', showResponseTimes: true, showUptimePercentage: true, showIncidentHistory: true, allowSubscriptions: true, darkMode: true, selectedMonitors: [], headerLinks: [], footerLinks: [] }); };
   const editPage = (page) => { setEditingPage(page); setFormData({ name: page.name || '', slug: page.slug || '', customDomain: page.customDomain || '', brandColor: page.brandColor || '#00F5FF', companyDescription: page.companyDescription || '', supportEmail: page.supportEmail || '', website: page.website || '', twitter: page.twitter || '', discord: page.discord || '', showResponseTimes: page.showResponseTimes ?? true, showUptimePercentage: page.showUptimePercentage ?? true, showIncidentHistory: page.showIncidentHistory ?? true, allowSubscriptions: page.allowSubscriptions ?? true, darkMode: page.darkMode ?? true, selectedMonitors: page.selectedMonitors || [], headerLinks: page.headerLinks || [], footerLinks: page.footerLinks || [] }); };
   const deletePage = async (id) => { setConfirmModal({ title: 'Delete status page?', message: 'This will permanently delete this status page.', onConfirm: async () => { setConfirmModal(null); await db.collection('statusPages').doc(id).delete(); toast('success', 'Status page deleted'); }, danger: true, confirmText: 'Delete', cancelText: 'Cancel' }); };
   const savePage = async () => { if (!formData.name || !formData.slug) { toast('error', 'Name and URL slug required'); return; } const data = { ...formData, userId: auth.currentUser.uid, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }; if (editingPage.id) { await db.collection('statusPages').doc(editingPage.id).update(data); toast('success', 'Status page updated!'); } else { await db.collection('statusPages').add({ ...data, isPublished: false, createdAt: firebase.firestore.FieldValue.serverTimestamp() }); toast('success', 'Status page created!'); } setEditingPage(null); };
@@ -1943,7 +1422,8 @@ const ReportPreviewContent = ({ activeReport, monitors, selectedMonitors }) => {
     ? selectedMonitors.map(id => monitors.find(m => m.id === id)).filter(Boolean)
     : monitors;
   const periodLabel = activeReport === 'daily' ? 'Yesterday' : activeReport === 'weekly' ? 'Last 7 Days' : activeReport === 'monthly' ? 'Last 30 Days' : 'Custom Range';
-  const avgUptime = reportMonitors.length > 0 ? (reportMonitors.reduce((a, m) => a + (m.uptimePercentage || 100), 0) / reportMonitors.length).toFixed(1) : '100.0';
+  const uptimes = reportMonitors.map(m => m.uptimePercentage).filter(u => typeof u === 'number' && isFinite(u));
+  const avgUptime = uptimes.length > 0 ? (uptimes.reduce((a, u) => a + u, 0) / uptimes.length).toFixed(1) : null;
   const avgResponse = reportMonitors.length > 0 ? Math.round(reportMonitors.reduce((a, m) => a + (m.avgResponseMs || 0), 0) / reportMonitors.length) : 0;
   const downCount = reportMonitors.filter(m => m.status === 'down').length;
 
@@ -1951,7 +1431,7 @@ const ReportPreviewContent = ({ activeReport, monitors, selectedMonitors }) => {
     <div>
       <div className="text-sm text-gray-400 mb-3">{periodLabel} • {reportMonitors.length} monitors</div>
       <div className="grid grid-cols-2 gap-4 text-sm">
-        <div><span className="text-gray-400">Avg Uptime</span><div className="font-bold text-green-400">{avgUptime}%</div></div>
+        <div><span className="text-gray-400">Avg Uptime</span><div className="font-bold text-green-400">{avgUptime !== null ? avgUptime + '%' : 'No data'}</div></div>
         <div><span className="text-gray-400">Down Monitors</span><div className={`font-bold ${downCount > 0 ? 'text-red-400' : 'text-green-400'}`}>{downCount}</div></div>
         <div><span className="text-gray-400">Avg Response</span><div className="font-bold">{avgResponse}ms</div></div>
         <div><span className="text-gray-400">Total Monitors</span><div className="font-bold">{reportMonitors.length}</div></div>
@@ -1979,38 +1459,10 @@ const sendReportEmail = async (activeReport, monitors, selectedMonitors) => {
     ? selectedMonitors.map(id => monitors.find(m => m.id === id)).filter(Boolean)
     : monitors;
   if (reportMonitors.length === 0) { alert('No monitors to include in report'); return; }
-
-  const email = auth.currentUser?.email;
-  if (!email) { alert('Please sign in to send reports'); return; }
-
-  const periodLabel = activeReport === 'daily' ? 'Daily Report' : activeReport === 'weekly' ? 'Weekly Report' : activeReport === 'monthly' ? 'Monthly Report' : 'Custom Report';
-  const avgUptime = reportMonitors.length > 0 ? (reportMonitors.reduce((a, m) => a + (m.uptimePercentage || 100), 0) / reportMonitors.length).toFixed(1) : '100.0';
-
-  const RESEND_API_KEY = 're_Hy1TH7nk_EhqPzuus64koJmTbnqvGKebr';
-  const htmlContent = `
-<div style="font-family: Arial, sans-serif; background: #050508; color: #E8E8F0; padding: 20px;">
-<div style="max-width: 600px; margin: 0 auto; background: #0D0D18; border-radius: 12px; padding: 30px;">
-<h1 style="color: #00F5FF; margin-bottom: 20px;">PulseGrid ${periodLabel}</h1>
-<table style="width:100%;border-collapse:collapse;">
-<tr><td style="padding:10px;background:#1A1A2E;border-radius:8px;"><div style="color:#00F5FF;font-size:24px;font-weight:bold;">${avgUptime}%</div><div style="color:#888;font-size:12px;">Avg Uptime</div></td>
-<td style="padding:10px;background:#1A1A2E;border-radius:8px;"><div style="color:#00F5FF;font-size:24px;font-weight:bold;">${reportMonitors.length}</div><div style="color:#888;font-size:12px;">Monitors</div></td></tr>
-</table>
-<h2 style="color:#00F5FF;margin:20px 0 10px;">Monitor Status</h2>
-<table style="width:100%;border-collapse:collapse;font-size:12px;">
-<tr style="background:#1A1A2E;"><th style="padding:8px;text-align:left;">Name</th><th style="padding:8px;text-align:left;">Status</th><th style="padding:8px;text-align:left;">Uptime</th></tr>
-${reportMonitors.map(m => `<tr><td style="padding:8px;border-bottom:1px solid #1A1A2E;">${m.name}</td><td style="padding:8px;border-bottom:1px solid #1A1A2E;color:${m.status === 'down' ? '#FF3366' : '#39FF14'};">${m.status === 'down' ? 'DOWN' : 'UP'}</td><td style="padding:8px;border-bottom:1px solid #1A1A2E;">${(m.uptimePercentage || 100).toFixed(1)}%</td></tr>`).join('')}
-</table>
-<p style="color:#666;font-size:11px;margin-top:20px;">Generated by PulseGrid on ${new Date().toLocaleString()}</p>
-</div></div>`;
-
   try {
-    await fetch('https://corsproxy.io/?https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + RESEND_API_KEY, 'X-Requested-With': 'XMLHttpRequest' },
-      body: JSON.stringify({ from: 'PulseGrid Reports <reports@resend.dev>', to: email, subject: 'PulseGrid Report - ' + periodLabel, html: htmlContent })
-    });
-    alert('Report sent to ' + email);
-  } catch (err) { alert('Failed to send report: ' + err.message); }
+    const result = await callMonitoringApi({ action: 'sendReportEmail', reportType: activeReport, monitorIds: reportMonitors.map(m => m.id) });
+    alert('Report sent to ' + (result.to || auth.currentUser?.email || 'your email'));
+  } catch (err) { alert('Failed to send report: ' + (err.message || '')); }
 };
 
 // Reports Page
@@ -2033,7 +1485,8 @@ const ReportsPage = () => {
   const generateReportHTML = (reportType, monitorList) => {
     const now = new Date().toLocaleString();
     const periodLabel = reportType === 'daily' ? 'Yesterday' : reportType === 'weekly' ? 'Last 7 Days' : reportType === 'monthly' ? 'Last 30 Days' : 'Custom Range';
-    const avgUptime = monitorList.length > 0 ? (monitorList.reduce((a, m) => a + (m.uptimePercentage || 100), 0) / monitorList.length).toFixed(2) : '100.00';
+    const uptimes = monitorList.map(m => m.uptimePercentage).filter(u => typeof u === 'number' && isFinite(u));
+    const avgUptime = uptimes.length > 0 ? (uptimes.reduce((a, u) => a + u, 0) / uptimes.length).toFixed(2) : 'No data';
     const avgResponse = monitorList.length > 0 ? Math.round(monitorList.reduce((a, m) => a + (m.avgResponseMs || 0), 0) / monitorList.length) : 0;
     const totalOutages = 0;
     const totalChecks = monitorList.length * 1440;
@@ -2078,7 +1531,7 @@ const ReportsPage = () => {
       <h2>Overview</h2>
       <div class="stats-grid">
         <div class="stat-box">
-          <div class="value">${avgUptime}%</div>
+          <div class="value">${uptimes.length > 0 ? avgUptime + '%' : 'No data'}</div>
           <div class="label">Avg Uptime</div>
         </div>
         <div class="stat-box">
@@ -2113,7 +1566,7 @@ const ReportsPage = () => {
           <tr>
             <td><strong>${m.name}</strong></td>
             <td style="color:#888;font-size:12px;">${(m.url || '').substring(0, 30)}</td>
-            <td class="status-up">${(m.uptimePercentage || 100).toFixed(2)}%</td>
+            <td class="status-up">${typeof m.uptimePercentage === 'number' ? m.uptimePercentage.toFixed(2) + '%' : 'No data'}</td>
             <td>${m.avgResponseMs || 0}ms</td>
             <td class="${m.status === 'down' ? 'status-down' : 'status-up'}">${m.status === 'down' ? 'DOWN' : 'UP'}</td>
           </tr>
@@ -2167,7 +1620,7 @@ const ReportsPage = () => {
           ${monitorList.filter(m => m.status !== 'down').map(m => `
           <tr>
             <td><strong>${m.name}</strong></td>
-            <td class="status-up">${(m.uptimePercentage || 100).toFixed(2)}%</td>
+            <td class="status-up">${typeof m.uptimePercentage === 'number' ? m.uptimePercentage.toFixed(2) + '%' : 'No data'}</td>
             <td>0h 00m 00s</td>
             <td>0</td>
             <td>${m.avgResponseMs || 0}ms</td>
@@ -2607,8 +2060,14 @@ const MonitorDetailPage = ({ monitorId }) => {
     setTestLoading(true);
     setShowTestModal(true);
     setTestResult(null);
-    await new Promise(r => setTimeout(r, 1500));
-    setTestResult({ status: 200, time: Math.floor(Math.random() * 300) + 50, ok: true });
+    try {
+      const r = await callMonitoringApi({ action: 'checkMonitor', monitorId: monitor.id });
+      const rr = r.result || {};
+      const fullLoad = (rr.checks && rr.checks.fullLoad) || {};
+      setTestResult({ status: fullLoad.statusCode || (rr.status === 'down' ? 'FAILED' : 200), time: rr.responseTimeMs || 0, ok: rr.status !== 'down', checks: rr.checks || {} });
+    } catch (err) {
+      setTestResult({ status: 'FAILED', time: 0, ok: false, error: err.message });
+    }
     setTestLoading(false);
   };
 
@@ -2617,8 +2076,19 @@ const MonitorDetailPage = ({ monitorId }) => {
   const getStatusColor = (s) => s === 'up' ? '#39FF14' : s === 'down' ? '#FF3366' : s === 'slow' ? '#FFB800' : '#6B6B8A';
   const getStatusClass = (s) => !s || s === 'up' || s === 'pending' ? 'up' : s === 'down' ? 'down' : s === 'slow' ? 'slow' : 'paused';
 
-  const uptime24h = monitor?.uptimePercentage?.toFixed(2) || '100.00';
-  const uptime30d = monitor?.uptimePercentage?.toFixed(2) || '100.00';
+  const uptime24h = typeof monitor?.uptimePercentage === 'number' ? monitor.uptimePercentage.toFixed(2) : null;
+  const uptime30d = uptime24h;
+  // Real per-entry response chart + per-day uptime grid, both from checkHistory only
+  const history = (monitor?.checkHistory || []).slice().sort((a, b) => new Date(a.time) - new Date(b.time));
+  const chartPoints = history.slice(-24).map(h => ({ time: new Date(h.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), status: h.status || 'unknown', response: h.responseTimeMs || 0 }));
+  const dayMap = {};
+  history.forEach(h => {
+    const key = new Date(h.time).toISOString().slice(0, 10);
+    if (!dayMap[key]) dayMap[key] = { total: 0, up: 0 };
+    dayMap[key].total++;
+    if (h.status !== 'down') dayMap[key].up++;
+  });
+  const dayGrid = Object.keys(dayMap).sort().slice(-90).map(date => ({ date, uptime: dayMap[date].total > 0 ? (dayMap[date].up / dayMap[date].total) * 100 : 100 }));
   const avgResponse = monitor?.avgResponseMs || 0;
 
   const tabs = [
@@ -2659,11 +2129,11 @@ const MonitorDetailPage = ({ monitorId }) => {
         </div>
         <div className="card-glass p-4">
           <div className="text-xs text-gray-400 mb-1">Uptime 24h</div>
-          <div className="text-xl font-bold text-green-400">{uptime24h}%</div>
+          <div className="text-xl font-bold text-green-400">{uptime24h !== null ? uptime24h + '%' : 'No data'}</div>
         </div>
         <div className="card-glass p-4">
           <div className="text-xs text-gray-400 mb-1">Uptime 30d</div>
-          <div className="text-xl font-bold text-green-400">{uptime30d}%</div>
+          <div className="text-xl font-bold text-green-400">{uptime30d !== null ? uptime30d + '%' : 'No data'}</div>
         </div>
         <div className="card-glass p-4">
           <div className="text-xs text-gray-400 mb-1">Avg Response</div>
@@ -2685,29 +2155,37 @@ const MonitorDetailPage = ({ monitorId }) => {
         <div className="space-y-6">
           <div className="card-glass p-6">
             <h3 className="font-bold mb-4">Response Time (24h)</h3>
-            <div className="h-40 flex items-end gap-1">
-              {Array.from({ length: 24 }, (_, i) => (
-                <div key={i} className="flex-1 bg-cyan-500/60" style={{ height: `${30 + Math.random() * 60}%` }}></div>
-              ))}
-            </div>
+            {chartPoints.length > 0 ? (
+              <div className="h-40 flex items-end gap-1">
+                {chartPoints.map((p, i) => (
+                  <div key={i} title={`${p.time} — ${p.status}${p.response ? ` (${p.response}ms)` : ''}`} className={`flex-1 ${p.status === 'down' ? 'bg-red-500/70' : p.status === 'slow' ? 'bg-amber-500/70' : 'bg-cyan-500/60'}`} style={{ height: `${Math.max(10, Math.min(100, p.response / 10))}%` }}></div>
+                ))}
+              </div>
+            ) : (
+              <div className="h-40 flex items-center justify-center text-gray-500 text-sm">No checks recorded yet — run a check to see real response times</div>
+            )}
             <div className="flex justify-between text-xs text-gray-500 mt-2">
-              <span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>23:59</span>
+              <span>{chartPoints[0]?.time || '—'}</span><span>{chartPoints[Math.floor(chartPoints.length / 2)]?.time || ''}</span><span>{chartPoints[chartPoints.length - 1]?.time || ''}</span>
             </div>
           </div>
           <div className="card-glass p-6">
             <h3 className="font-bold mb-4">Last 90 Days</h3>
-            <div className="grid grid-cols-13 gap-1">
-              {Array.from({ length: 90 }, (_, i) => (
-                <div key={i} className="aspect-square rounded-sm" style={{ background: Math.random() > 0.1 ? '#39FF14' : '#1A1A2E' }}></div>
-              ))}
-            </div>
+            {dayGrid.length > 0 ? (
+              <div className="grid grid-cols-13 gap-1">
+                {dayGrid.map((d, i) => (
+                  <div key={i} title={d.date} className="aspect-square rounded-sm" style={{ background: d.uptime >= 99.9 ? '#39FF14' : d.uptime >= 95 ? '#FFB800' : '#FF3366' }}></div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-gray-500 text-sm">No check history yet — days appear here after checks run</div>
+            )}
           </div>
           <div className="card-glass p-6">
             <h3 className="font-bold mb-4">SLA Tracking</h3>
             <div className="grid md:grid-cols-3 gap-4">
-              <div><div className="text-sm text-gray-400">Uptime</div><div className="text-2xl font-bold text-green-400">{uptime30d}%</div></div>
+              <div><div className="text-sm text-gray-400">Uptime</div><div className="text-2xl font-bold text-green-400">{uptime30d !== null ? uptime30d + '%' : 'No data'}</div></div>
               <div><div className="text-sm text-gray-400">SLA Target</div><div className="text-2xl font-bold">{monitor?.slaTarget || 99.9}%</div></div>
-              <div><div className="text-sm text-gray-400">Status</div><div className="text-xl font-bold text-green-400">✅ MEETING SLA</div></div>
+              <div><div className="text-sm text-gray-400">Status</div><div className={`text-xl font-bold ${uptime30d === null ? 'text-gray-400' : parseFloat(uptime30d) >= (monitor?.slaTarget || 99.9) ? 'text-green-400' : 'text-red-400'}`}>{uptime30d === null ? 'NO DATA' : parseFloat(uptime30d) >= (monitor?.slaTarget || 99.9) ? '✅ MEETING SLA' : '❌ BELOW SLA'}</div></div>
             </div>
           </div>
         </div>
@@ -2884,13 +2362,13 @@ const MonitorDetailPage = ({ monitorId }) => {
         <div className="card-glass p-6">
           <h3 className="font-bold mb-4">Response History</h3>
           <div className="space-y-2">
-            {Array.from({ length: 5 }, (_, i) => (
+            {history.length > 0 ? history.slice().reverse().slice(0, 20).map((h, i) => (
               <div key={i} className="flex items-center justify-between p-3 bg-gray-900 rounded-lg">
-                <span className="text-sm">{new Date(Date.now() - i * 3600000).toLocaleString()}</span>
-                <span className="text-green-400 text-sm">200 OK</span>
-                <span className="text-cyan-400 text-sm">{Math.floor(Math.random() * 200 + 50)}ms</span>
+                <span className="text-sm">{new Date(h.time).toLocaleString()}</span>
+                <span className={`text-sm ${h.status === 'down' ? 'text-red-400' : h.status === 'slow' ? 'text-amber-400' : 'text-green-400'}`}>{(h.status || 'up').toUpperCase()}</span>
+                <span className="text-cyan-400 text-sm">{h.responseTimeMs ? h.responseTimeMs + 'ms' : '—'}</span>
               </div>
-            ))}
+            )) : <div className="text-gray-500 text-sm">No checks recorded yet</div>}
           </div>
         </div>
       )}
@@ -2917,7 +2395,7 @@ const MonitorDetailPage = ({ monitorId }) => {
             ) : testResult ? (
               <>
                 <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div><div className="text-sm text-gray-400">Status</div><div className="text-green-400 font-bold">200 OK</div></div>
+                  <div><div className="text-sm text-gray-400">Status</div><div className={`font-bold ${testResult.ok ? 'text-green-400' : 'text-red-400'}`}>{testResult.status}{testResult.ok ? ' OK' : ''}{testResult.error ? ' — ' + testResult.error : ''}</div></div>
                   <div><div className="text-sm text-gray-400">Response Time</div><div className="text-cyan-400 font-bold">{testResult.time}ms</div></div>
                 </div>
                 <div className="flex gap-2">

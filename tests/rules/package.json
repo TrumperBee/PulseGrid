@@ -1,0 +1,13 @@
+{
+  "name": "pulsegrid-rules-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Firestore security rules tests (run against the emulator via `npm run test:rules` from the repo root)",
+  "scripts": {
+    "test": "node --test rules.test.js"
+  },
+  "dependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^11.0.0"
+  }
+}

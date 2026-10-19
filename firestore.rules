@@ -1,0 +1,52 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // A document belongs to exactly one authenticated user.
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    // ----- users/{uid} : profile, prefs, api key metadata (created by client) -----
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) && request.resource.data.uid == uid;
+      // Update/delete only by owner, and the uid may not be reassigned.
+      allow update: if isOwner(uid) && request.resource.data.uid == uid;
+      allow delete: if isOwner(uid);
+    }
+
+    // ----- monitors/{id} : one document per user-owned monitor -----
+    match /monitors/{id} {
+      allow read, delete: if isOwner(resource.data.userId);
+      allow create: if isOwner(request.resource.data.userId);
+      // userId must never change (prevents ownership transfer / leaks).
+      allow update: if isOwner(resource.data.userId)
+                    && request.resource.data.userId == resource.data.userId;
+    }
+
+    // ----- incidents/{id} : created and updated ONLY by the server (Admin SDK
+    //        bypasses these rules, so client writes are denied outright) -----
+    match /incidents/{id} {
+      allow read: if isOwner(resource.data.userId);
+      allow write: if false;
+    }
+
+    // ----- statusPages/{id} : client CRUD for the owner's own pages -----
+    match /statusPages/{id} {
+      allow read, delete: if isOwner(resource.data.userId);
+      allow create: if isOwner(request.resource.data.userId);
+      allow update: if isOwner(resource.data.userId)
+                    && request.resource.data.userId == resource.data.userId;
+    }
+
+    // ----- Default deny: anything not explicitly allowed above -----
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

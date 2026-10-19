@@ -4,7 +4,9 @@
   "description": "API Uptime Monitoring SaaS",
   "scripts": {
     "dev": "npx serve . -l 3000",
-    "build": "echo 'Static site - no build needed'"
+    "build": "echo 'Static site - no build needed'",
+    "test:unit": "node --test functions/test/core.test.js functions/test/monitoring.test.js functions/test/checks.test.js",
+    "test:rules": "npm --prefix tests/rules install --no-audit --no-fund && firebase emulators:exec --project demo-pulsegrid --only firestore \"node --test tests/rules/rules.test.js\""
   },
   "dependencies": {
     "@capacitor/android": "^8.3.1",
