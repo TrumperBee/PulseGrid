@@ -19,7 +19,10 @@ function makeWorld() {
   const checkRegion = async (monitor) => ({
     status: monitor._forceStatus || 'up',
     responseTimeMs: 120,
-    checks: { connectivity: { passed: monitor._forceStatus !== 'down' }, fullLoad: { passed: monitor._forceStatus !== 'down', statusCode: 200 } },
+    checks: {
+      connectivity: { passed: monitor._forceStatus !== 'down' },
+      fullLoad: { passed: monitor._forceStatus !== 'down', statusCode: 200, responseBody: '<html>' + 'x'.repeat(2000) + '</html>' },
+    },
     locationInfo: { name: 'Nairobi, Kenya' },
   });
   const sendEmail = async (msg) => { emails.push(msg); };
@@ -98,6 +101,32 @@ test('pipeline: nextCheckAt is scheduled from intervalSeconds', async () => {
   await runAll({ monitors: [w.monitors.get('m1')], repo: w.repo, checkRegion: w.checkRegion, sendEmail: w.sendEmail, now });
   const m = w.monitors.get('m1');
   assert.equal(m.nextCheckAt.getTime(), now + 120_000);
+});
+
+test('pipeline: raw page bodies are stripped from persisted history and incidents', async () => {
+  const w = makeWorld();
+  const now = 7_000_000;
+  w.monitors.set('m1', mkMonitor({ _forceStatus: 'down', alertAfterFailures: 1 }));
+  await runAll({ monitors: [w.monitors.get('m1')], repo: w.repo, checkRegion: w.checkRegion, sendEmail: w.sendEmail, now });
+  const m = w.monitors.get('m1');
+  assert.equal(m.checkHistory.length, 1);
+  assert.ok(!JSON.stringify(m.checkHistory).includes('responseBody'), 'history must not contain responseBody');
+  assert.ok(!JSON.stringify(w.incidents[0].checkResults).includes('responseBody'), 'incident must not contain responseBody');
+  assert.ok(m.checkHistory[0].regions.nairobi.checks.fullLoad.statusCode === 200, 'summary fields are kept');
+  assert.equal(m.lastCheckedAt.getTime(), now);
+  assert.equal(m.lastFailureAt.getTime(), now);
+  assert.equal(m.lastSuccessAt, undefined);
+});
+
+test('pipeline: successful checks set lastSuccessAt and leave lastFailureAt untouched', async () => {
+  const w = makeWorld();
+  const now = 8_000_000;
+  w.monitors.set('m1', mkMonitor());
+  await runAll({ monitors: [w.monitors.get('m1')], repo: w.repo, checkRegion: w.checkRegion, sendEmail: w.sendEmail, now });
+  const m = w.monitors.get('m1');
+  assert.equal(m.lastCheckedAt.getTime(), now);
+  assert.equal(m.lastSuccessAt.getTime(), now);
+  assert.equal(m.lastFailureAt, undefined);
 });
 
 test('pipeline: monitors without alert contacts never trigger email', async () => {

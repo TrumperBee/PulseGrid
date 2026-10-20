@@ -120,12 +120,11 @@ const LeafletMap = ({ monitors = [], userData }) => {
       attributionControl: false
     });
     
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      subdomains: 'abcd',
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19
     }).addTo(map);
     
-    L.control.attribution({ position: 'bottomright', prefix: false }).addAttribution('© OpenStreetMap © CARTO').addTo(map);
+    L.control.attribution({ position: 'bottomright', prefix: false }).addAttribution('© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors').addTo(map);
     
     mapInstance.current = map;
     
@@ -1488,8 +1487,8 @@ const ReportsPage = () => {
     const uptimes = monitorList.map(m => m.uptimePercentage).filter(u => typeof u === 'number' && isFinite(u));
     const avgUptime = uptimes.length > 0 ? (uptimes.reduce((a, u) => a + u, 0) / uptimes.length).toFixed(2) : 'No data';
     const avgResponse = monitorList.length > 0 ? Math.round(monitorList.reduce((a, m) => a + (m.avgResponseMs || 0), 0) / monitorList.length) : 0;
-    const totalOutages = 0;
-    const totalChecks = monitorList.length * 1440;
+    const totalChecks = monitorList.reduce((a, m) => a + (Number(m.uptimeChecksTotal) || 0), 0);
+    const failedChecks = monitorList.reduce((a, m) => a + Math.max(0, (Number(m.uptimeChecksTotal) || 0) - (Number(m.uptimeChecksPassed) || 0)), 0);
     const downMonitors = monitorList.filter(m => m.status === 'down');
 
     let html = `
@@ -1535,8 +1534,8 @@ const ReportsPage = () => {
           <div class="label">Avg Uptime</div>
         </div>
         <div class="stat-box">
-          <div class="value">${totalOutages}</div>
-          <div class="label">Outages</div>
+          <div class="value">${totalChecks > 0 ? failedChecks : 'No data'}</div>
+          <div class="label">${totalChecks > 0 ? 'Failed Checks (of ' + totalChecks + ')' : 'No checks recorded'}</div>
         </div>
         <div class="stat-box">
           <div class="value">${avgResponse}ms</div>

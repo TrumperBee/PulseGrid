@@ -1,0 +1,20 @@
+# Vercel deployment includes only the static web app.
+# outputDirectory is "." (vercel.json), so without this the ENTIRE repo —
+# including android/ (stale assets that still contain an old API key),
+# functions/, tests/, and internal docs — would be published as static files.
+android/
+functions/
+tests/
+node_modules/
+.github/
+index-full.html
+PHASE0_AUDIT.md
+server.js
+firebase.json
+firestore.rules
+firestore.indexes.json
+capacitor.config.json
+package-lock.json
+.gitignore
+*.md
+.firebaserc

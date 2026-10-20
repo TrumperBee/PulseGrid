@@ -4,6 +4,25 @@
 // so the whole pipeline is unit-testable without network or Firebase.
 const core = require('./core');
 
+// Never persist raw page bodies (or unbounded link lists) into monitor/incident
+// documents: they can exceed Firestore's 1 MiB document limit and leak content.
+function sanitizeRegionResults(regionResults) {
+  const out = {};
+  for (const [regionId, result] of Object.entries(regionResults || {})) {
+    if (!result) continue;
+    const checks = { ...(result.checks || {}) };
+    if (checks.fullLoad) {
+      const { responseBody, ...rest } = checks.fullLoad;
+      checks.fullLoad = rest;
+    }
+    if (checks.linkValidation && Array.isArray(checks.linkValidation.brokenUrls)) {
+      checks.linkValidation = { ...checks.linkValidation, brokenUrls: checks.linkValidation.brokenUrls.slice(0, 20) };
+    }
+    out[regionId] = { ...result, checks };
+  }
+  return out;
+}
+
 async function processMonitor({ monitor, repo, checkRegion, sendEmail, now = Date.now() }) {
   const regionIds = (monitor.locations && monitor.locations.length ? monitor.locations : ['nairobi']);
   const regionResults = {};
@@ -13,6 +32,7 @@ async function processMonitor({ monitor, repo, checkRegion, sendEmail, now = Dat
 
   const openIncidents = await repo.getOpenIncidents(monitor.id);
   const actions = core.evaluateMonitor({ monitor, regionResults, openIncidents, now });
+  const persistedRegions = sanitizeRegionResults(regionResults);
 
   let total = 0;
   let passedCount = 0;
@@ -45,7 +65,7 @@ async function processMonitor({ monitor, repo, checkRegion, sendEmail, now = Dat
       isResolved: false,
       affectedLocations: core.regionNameList(regionResults, false),
       workingLocations: core.regionNameList(regionResults, true),
-      checkResults: regionResults,
+      checkResults: persistedRegions,
       timeline: [{ time: new Date(now).toISOString(), event: 'Incident created', detail: 'Failure threshold reached (' + (Math.max(1, Number(monitor.alertAfterFailures) || 3)) + ' consecutive failed checks)' }],
     });
   }
@@ -86,11 +106,13 @@ async function processMonitor({ monitor, repo, checkRegion, sendEmail, now = Dat
 
   const newTotal = (Number(monitor.uptimeChecksTotal) || 0) + total;
   const newPassed = (Number(monitor.uptimeChecksPassed) || 0) + passedCount;
-  const historyEntry = { time: new Date(now).toISOString(), status: actions.status, responseTimeMs: avgResponseMs, regions: regionResults };
+  const hasFailure = Object.values(regionResults).some((r) => r && r.status === 'down');
+  const historyEntry = { time: new Date(now).toISOString(), status: actions.status, responseTimeMs: avgResponseMs, regions: persistedRegions };
   const updates = {
     status: actions.status,
     avgResponseMs,
     lastError,
+    lastCheckedAt: new Date(now),
     consecutiveFailures: actions.consecutiveFailures,
     nextCheckAt: new Date(core.nextCheckAtMs(now, monitor.intervalSeconds)),
     checkHistory: [...(monitor.checkHistory || []).slice(-47), historyEntry],
@@ -98,6 +120,8 @@ async function processMonitor({ monitor, repo, checkRegion, sendEmail, now = Dat
     uptimeChecksPassed: newPassed,
     uptimePercentage: core.computeUptime(newTotal, newPassed),
   };
+  if (hasFailure) updates.lastFailureAt = new Date(now);
+  else updates.lastSuccessAt = new Date(now);
   if (actions.alert === 'down') updates.lastDownAlertAt = new Date(now);
   if (actions.alert === 'recovered') updates.lastRecoveryAlertAt = new Date(now);
   await repo.updateMonitor(monitor.id, updates);

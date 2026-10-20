@@ -176,6 +176,8 @@ h1,h2,h3,h4,h5,h6 { font-family: 'Syne', sans-serif; }
 .pulsegrid-map .leaflet-container { background: #050508; height: 100%; width: 100%; border-radius: 12px; }
 .pulsegrid-map .leaflet-control-attribution { background: rgba(5,5,8,0.8); color: #6B6B8A; font-size: 10px; }
 .pulsegrid-map .leaflet-control-attribution a { color: #00F5FF; }
+/* OSM standard tiles have no API key; invert them for the dark theme. */
+.pulsegrid-map .leaflet-tile { filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9); }
 
 .pg-marker { position: relative; display: flex; align-items: center; justify-content: center; }
 .pg-marker-ring { width: 40px; height: 40px; border-radius: 50%; border: 2px solid; display: flex; align-items: center; justify-content: center; }

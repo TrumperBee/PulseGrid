@@ -37,37 +37,22 @@ if (typeof firebase !== 'undefined') {
   db = firebase.firestore();
 }
 
-// Email utility - sends alerts via Resend API directly from browser
-const sendAlertEmail = async (monitor, eventType, details = {}) => {
-  if (!monitor.alertContacts || monitor.alertContacts.length === 0) return;
-  
-  const RESEND_API_KEY = 're_Hy1TH7nk_EhqPzuus64koJmTbnqvGKebr';
-  const subjectLine = eventType === 'down' ? '🚨 ALERT: ' + monitor.name + ' is DOWN' : '✅ RECOVERED: ' + monitor.name + ' is back up';
-  const htmlContent = '<div style="font-family: Arial, sans-serif; background: #050508; color: #E8E8F0; padding: 20px;"><div style="max-width: 600px; margin: 0 auto; background: #0D0D18; border-radius: 12px; padding: 30px;"><h1 style="color: #00F5FF;">' + (eventType === 'down' ? '🚨 Monitor Down!' : '✅ Monitor Recovered!') + '</h1><p><strong>Monitor:</strong> ' + monitor.name + '</p><p><strong>URL:</strong> ' + monitor.url + '</p><p><strong>Time:</strong> ' + new Date().toLocaleString() + '</p><a href="https://pulsegrid.vercel.app" style="display: inline-block; background: #00F5FF; color: #000; padding: 12px 24px; border-radius: 8px; text-decoration: none; margin-top: 15px;">View in PulseGrid</a></div></div>';
-  
-  try {
-    await fetch('https://corsproxy.io/?https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + RESEND_API_KEY,
-        'X-Requested-With': 'XMLHttpRequest'
-      },
-      body: JSON.stringify({
-        from: 'PulseGrid Alerts <alerts@resend.dev>',
-        to: monitor.alertContacts,
-        subject: subjectLine,
-        html: htmlContent
-      })
-    });
-    console.log('Alert sent:', eventType, monitor.name);
-  } catch (err) {
-    console.error('Failed to send alert email:', err);
-  }
+// Server-side monitoring API (Cloud Functions). No secrets in the browser —
+// auth is a Firebase ID token; the Resend key lives only in Cloud Functions secrets.
+const MONITORING_API_URL = 'https://us-central1-pulsegrid-f5631.cloudfunctions.net/api';
+const callMonitoringApi = async (payload) => {
+  if (!auth?.currentUser) throw new Error('Not signed in');
+  const token = await auth.currentUser.getIdToken();
+  const res = await fetch(MONITORING_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ('API error ' + res.status));
+  return data;
 };
 
-// Context for toast
-const ToastContext = createContext();
 const useToast = () => useContext(ToastContext);
 
 // Context for navigation
@@ -104,121 +89,150 @@ const MONITORING_REGIONS = [
   { id: 'frankfurt', name: 'Frankfurt', country: 'Germany', lat: 50.1109, lon: 8.6821, flag: '🇩🇪' },
   { id: 'newyork', name: 'New York', country: 'USA', lat: 40.7128, lon: -74.0060, flag: '🇺🇸' },
   { id: 'london', name: 'London', country: 'UK', lat: 51.5074, lon: -0.1278, flag: '🇬🇧' },
-  { id: 'singapore', name: 'Singapore', country: 'Singapore', lat: 1.3521, lon: 103.8198, flag: '🇸🇬' },
+  { id: 'singapore', name: 'Singapore', country: 'Singapore', lat: 1.3521, lon: 103.8198, flag: '🇸🇬', plan: 'pro' },
   { id: 'tokyo', name: 'Tokyo', country: 'Japan', lat: 35.6762, lon: 139.6503, flag: '🇯🇵' },
   { id: 'sydney', name: 'Sydney', country: 'Australia', lat: -33.8688, lon: 151.2093, flag: '🇦🇺' },
-  { id: 'saopaulo', name: 'São Paulo', country: 'Brazil', lat: -23.5505, lon: -46.6333, flag: '🇧🇷' },
+  { id: 'saopaulo', name: 'São Paulo', country: 'Brazil', lat: -23.5505, lon: -46.6333, flag: '🇧🇷', plan: 'pro' },
   { id: 'mumbai', name: 'Mumbai', country: 'India', lat: 19.0760, lon: 72.8777, flag: '🇮🇳' },
   { id: 'dubai', name: 'Dubai', country: 'UAE', lat: 25.2048, lon: 55.2708, flag: '🇦🇪' },
   { id: 'amsterdam', name: 'Amsterdam', country: 'Netherlands', lat: 52.3676, lon: 4.9044, flag: '🇳🇱' },
   { id: 'toronto', name: 'Toronto', country: 'Canada', lat: 43.6532, lon: -79.3832, flag: '🇨🇦' },
 ];
 
-// Check a single monitor URL from a specific region (simulated)
-const checkMonitor = async (monitor, regionId = 'nairobi') => {
-  const startTime = Date.now();
-  try {
-    const controller = new AbortController();
-    const timeout = monitor.timeoutSeconds ? monitor.timeoutSeconds * 1000 : 10000;
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
-
-    const response = await fetch('https://corsproxy.io/?' + encodeURIComponent(monitor.url), {
-      method: monitor.method || 'GET',
-      signal: controller.signal,
-      headers: monitor.headers || {},
-      body: monitor.method !== 'GET' && monitor.body ? monitor.body : undefined
-    });
-    clearTimeout(timeoutId);
-    const responseTime = Date.now() - startTime;
-    const text = await response.text();
-
-    if (!response.ok) return { status: 'down', responseTime, error: `HTTP ${response.status}`, region: regionId };
-
-    if (monitor.expectedStatusCode && response.status !== monitor.expectedStatusCode) {
-      return { status: 'down', responseTime, error: `Expected ${monitor.expectedStatusCode}, got ${response.status}`, region: regionId };
-    }
-
-    if (monitor.responseMustContain && !text.includes(monitor.responseMustContain)) {
-      return { status: 'down', responseTime, error: 'Missing expected content', region: regionId };
-    }
-
-    if (monitor.responseMustNotContain && text.includes(monitor.responseMustNotContain)) {
-      return { status: 'down', responseTime, error: 'Contains forbidden content', region: regionId };
-    }
-
-    if (monitor.maxResponseMs && responseTime > monitor.maxResponseMs) {
-      return { status: 'slow', responseTime, error: `Timeout: ${responseTime}ms > ${monitor.maxResponseMs}ms`, region: regionId };
-    }
-
-    return { status: 'up', responseTime, error: null, region: regionId };
-  } catch (err) {
-    const responseTime = Date.now() - startTime;
-    return { status: 'down', responseTime, error: err.name === 'AbortError' ? 'Timeout' : err.message, region: regionId };
-  }
-};
-
-// Check all monitors and update Firestore
-const checkAllMonitors = async (monitorsList, userId) => {
-  const batch = db.batch();
-  let downCount = 0;
-  let totalResponse = 0;
-
-  for (const m of monitorsList) {
-    const regions = m.locations || ['nairobi'];
-    const regionResults = { nairobi: null, frankfurt: null, newyork: null };
-    let overallStatus = 'up';
-
-    for (const region of regions) {
-      const result = await checkMonitor(m, region);
-      regionResults[region] = result;
-      if (result.status === 'down') overallStatus = 'down';
-      else if (result.status === 'slow' && overallStatus === 'up') overallStatus = 'slow';
-    }
-
-    const avgResponseTime = Math.round(Object.values(regionResults).filter(r => r).reduce((a, r) => a + r.responseTime, 0) / regions.length);
+// Leaflet Map component
+const LeafletMap = ({ monitors = [], userData }) => {
+  const mapRef = useRef(null);
+  const mapInstance = useRef(null);
+  const markersRef = useRef({});
+  
+  useEffect(() => {
+    if (!mapRef.current || typeof L === 'undefined') return;
     
-    if (overallStatus === 'down' && m.status !== 'down') {
-      await db.collection('incidents').add({
-        monitorId: m.id, monitorName: m.name, userId,
-        reason: `Down from ${regions.join(', ')}: ${Object.values(regionResults).find(r => r?.error)?.error || 'Unknown error'}`,
-        isResolved: false, createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
+    if (mapInstance.current) {
+      mapInstance.current.remove();
+      mapInstance.current = null;
     }
-    if (overallStatus !== 'down' && m.status === 'down') {
-      const existingIncidents = await db.collection('incidents').where('monitorId', '==', m.id).where('isResolved', '==', false).get();
-      const batch2 = db.batch();
-      existingIncidents.forEach(doc => { batch2.update(db.collection('incidents').doc(doc.id), { isResolved: true, resolvedAt: firebase.firestore.FieldValue.serverTimestamp() }); });
-      await batch2.commit();
-    }
-
-    if (overallStatus === 'down') downCount++;
-    totalResponse += avgResponseTime;
-    batch.update(db.collection('monitors').doc(m.id), {
-      status: overallStatus,
-      avgResponseMs: avgResponseTime,
-      lastCheck: firebase.firestore.FieldValue.serverTimestamp(),
-      lastError: Object.values(regionResults).find(r => r?.error)?.error,
-      checkHistory: [...(m.checkHistory || []).slice(-47), { time: new Date(), status: overallStatus, responseTime: avgResponseTime, regions: regionResults }]
+    
+    const map = L.map(mapRef.current, {
+      center: [20, 0],
+      zoom: 2,
+      zoomControl: false,
+      attributionControl: false
     });
-  }
-
-  await batch.commit();
-  return { downCount, avgResponse: monitorsList.length > 0 ? Math.round(totalResponse / monitorsList.length) : 0 };
+    
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19
+    }).addTo(map);
+    
+    L.control.attribution({ position: 'bottomright', prefix: false }).addAttribution('© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors').addTo(map);
+    
+    mapInstance.current = map;
+    
+    const getMarkerClass = (regionId) => {
+      const regionMonitors = monitors.filter(m => m.locations?.includes(regionId));
+      if (regionMonitors.length === 0) return 'none';
+      
+      const downCount = regionMonitors.filter(m => m.status === 'down').length;
+      const slowCount = regionMonitors.filter(m => m.status === 'slow').length;
+      
+      if (downCount > 0) return 'down';
+      if (slowCount > 0) return 'slow';
+      return 'up';
+    };
+    
+    MONITORING_REGIONS.forEach(region => {
+      const markerClass = getMarkerClass(region.id);
+      const isPro = region.plan === 'pro';
+      
+      const icon = L.divIcon({
+        className: 'pg-marker ' + markerClass + (isPro ? ' pro' : ''),
+        html: `<div class="pg-marker-ring"></div><div class="pg-marker-dot"></div>${isPro ? '<div class="pg-marker-label">' + region.flag + ' PRO</div>' : ''}`,
+        iconSize: [44, 44],
+        iconAnchor: [22, 22]
+      });
+      
+      const marker = L.marker([region.lat, region.lon], { icon }).addTo(map);
+      
+      const regionMonitors = monitors.filter(m => m.locations?.includes(region.id));
+      const downMons = regionMonitors.filter(m => m.status === 'down');
+      const slowMons = regionMonitors.filter(m => m.status === 'slow');
+      const upMons = regionMonitors.filter(m => !m.status || m.status === 'up' || m.status === 'pending');
+      const avgResponse = regionMonitors.length > 0 
+        ? Math.round(regionMonitors.reduce((a, m) => a + (m.avgResponseMs || 0), 0) / regionMonitors.length) 
+        : 0;
+      
+      let popupContent = '';
+      
+      if (isPro) {
+        popupContent = `
+          <div class="pg-popup">
+            <div class="pg-popup-title">${region.flag} ${region.name}, ${region.country} 🔒</div>
+            <div class="pg-popup-pro">
+              <p style="color: #6B6B8A; font-size: 11px;">Available on Pro plan</p>
+              <p style="color: #6B6B8A; font-size: 11px; margin-top: 4px;">Monitor your APIs from Southeast Asia</p>
+              <button class="pg-popup-pro-btn" onclick="window.navigateToBilling && window.navigateToBilling()">Upgrade to Pro</button>
+            </div>
+          </div>
+        `;
+      } else if (regionMonitors.length === 0) {
+        popupContent = `
+          <div class="pg-popup">
+            <div class="pg-popup-title">${region.flag} ${region.name}, ${region.country}</div>
+            <div style="color: #6B6B8A; font-size: 12px;">No monitors checking from here yet.</div>
+            <div style="color: #00F5FF; font-size: 11px; margin-top: 8px;">Add this location to start monitoring.</div>
+          </div>
+        `;
+      } else {
+        let rows = '';
+        [...upMons, ...slowMons, ...downMons].forEach(m => {
+          const statusClass = m.status === 'down' ? 'down' : m.status === 'slow' ? 'slow' : 'up';
+          const statusIcon = m.status === 'down' ? '❌' : m.status === 'slow' ? '🟡' : '✅';
+          rows += `<div class="pg-popup-row ${statusClass}"><span>${statusIcon} ${m.name.substring(0, 20)}</span><span>${m.avgResponseMs || '—'}ms</span></div>`;
+        });
+        
+        popupContent = `
+          <div class="pg-popup">
+            <div class="pg-popup-title">${region.flag} ${region.name}, ${region.country}</div>
+            <div style="border-bottom: 1px solid #1A1A2E; margin: 8px 0;"></div>
+            <div style="font-size: 12px; color: #E8E8F0;">${regionMonitors.length} monitors checking</div>
+            <div style="margin-top: 8px;">${rows}</div>
+            <div class="pg-popup-stats">
+              <div>Avg response: ${avgResponse}ms</div>
+              <div>Last checked: ${new Date().toLocaleTimeString()}</div>
+            </div>
+          </div>
+        `;
+      }
+      
+      marker.bindPopup(popupContent, { className: 'pg-popup-wrapper' });
+      markersRef.current[region.id] = marker;
+    });
+    
+    return () => {
+      if (mapInstance.current) {
+        mapInstance.current.remove();
+        mapInstance.current = null;
+      }
+    };
+  }, [monitors, userData]);
+  
+  return <div ref={mapRef} className="pulsegrid-map rounded-lg"></div>;
 };
 
-// Code block helper to render JSON/curl without JSX conflicts
 const CodeBlock = ({ code, color = '#E8E8F0' }) => (
   <div className="p-4 bg-[#0A0A0F] border border-cyan-500/20 rounded-lg font-mono text-xs overflow-x-auto whitespace-pre" style={{ color }}>{code}</div>
 );
 
-// Generate chart data
-const generateChartData = () => {
-  const regions = ['Nairobi', 'Frankfurt', 'New York', 'London', 'Singapore', 'Tokyo', 'Sydney', 'São Paulo', 'Mumbai', 'Dubai', 'Amsterdam', 'Toronto'];
-  return Array.from({ length: 24 }, (_, i) => {
-    const data = { time: `${i}:00` };
-    regions.forEach(r => { data[r] = Math.floor(Math.random() * 200) + 80; });
-    return data;
-  });
+// Chart data derived ONLY from real check history (no random/fake points)
+const buildChartDataFromHistory = (monitors) => {
+  const history = [];
+  monitors.forEach(m => (m.checkHistory || []).forEach(h => history.push(h)));
+  history.sort((a, b) => new Date(a.time) - new Date(b.time));
+  return history.slice(-24).map(h => ({
+    time: new Date(h.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    response: h.responseTimeMs || 0,
+    status: h.status || 'unknown',
+  }));
 };
 
 // Spinner
@@ -283,7 +297,8 @@ const EmailVerificationScreen = ({ onResend, onContinue, onBack, resendCooldown 
         <h2 className="text-2xl font-bold mb-4">Verify Your Email</h2>
         <p className="text-gray-400 mb-2">We sent a verification link to</p>
         <p className="text-cyan-400 font-medium mb-6">{auth.currentUser?.email}</p>
-        <p className="text-sm text-gray-500 mb-8">Click the link in your email to activate your account.</p>
+        <p className="text-sm text-gray-500 mb-2">Click the link in your email to activate your account.</p>
+        <p className="text-xs text-amber-400 mb-8">📧 Also check your spam/junk folder if you don't see it within a few minutes.</p>
         <div className="space-y-3">
           <button onClick={onResend} disabled={resendCooldown > 0} className="btn-ghost w-full py-3">
             {resendCooldown > 0 ? `Resend Email (${resendCooldown}s)` : 'Resend Email'}
@@ -325,7 +340,7 @@ const AuthPage = ({ initialTab }) => {
       const userCredential = await auth.createUserWithEmailAndPassword(email, password);
       const user = userCredential.user;
       await user.updateProfile({ displayName: fullName });
-      try { await user.sendEmailVerification(); } catch (e) {}
+      try { await user.sendEmailVerification(); } catch (e) { console.error('Verification error:', e); }
       await db.collection('users').doc(user.uid).set({
         uid: user.uid, email, fullName, companyName: companyName || '', plan: 'pro',
         createdAt: firebase.firestore.FieldValue.serverTimestamp(), avatarUrl: '', emailVerified: false
@@ -393,9 +408,15 @@ const AuthPage = ({ initialTab }) => {
     try {
       await auth.sendPasswordResetEmail(email);
       setForgotSent(true);
-      toast('success', 'Password reset email sent to ' + email);
+      setMessage('Password reset email sent! Check your inbox (and spam folder).');
     } catch (error) {
-      toast('error', 'Failed to send reset email');
+      console.error('Password reset error:', error);
+      let msg = 'Failed to send reset email';
+      if (error.code === 'auth/user-not-found') msg = 'No account with this email exists';
+      else if (error.code === 'auth/invalid-email') msg = 'Invalid email address';
+      else if (error.code === 'auth/too-many-requests') msg = 'Too many attempts. Try again later';
+      toast('error', msg);
+      setMessage('');
     }
     setLoading(false);
   };
@@ -409,7 +430,8 @@ const AuthPage = ({ initialTab }) => {
           {forgotSent ? (
             <div className="text-center">
               <div className="text-cyan-400 mb-4 flex justify-center">{ICONS.mail}</div>
-              <p className="text-gray-400 mb-6">Check your inbox for a reset link.</p>
+              <p className="text-gray-400 mb-2">Check your inbox (and spam folder) for the reset link.</p>
+              <p className="text-xs text-amber-400 mb-6">📧 Also check your spam/junk folder if you don't see it within a few minutes.</p>
               <button onClick={() => { setShowForgot(false); setForgotSent(false); setTab('login'); }} className="btn-primary w-full py-3">Back to Login</button>
             </div>
           ) : (
@@ -500,13 +522,15 @@ const Dashboard = () => {
   const monitorsRef = useRef([]);
 
   const handleCheck = async () => {
-    const mons = monitorsRef.current;
-    if (checking || mons.length === 0) return;
+    if (checking) return;
     setChecking(true);
     try {
-      const result = await checkAllMonitors(mons, auth.currentUser.uid);
-      setStats(prev => ({ ...prev, down: result.downCount, avgResponse: result.avgResponse }));
-    } catch (err) { console.error('Check failed:', err); }
+      const result = await callMonitoringApi({ action: 'checkAll' });
+      toast(result.down > 0 ? 'warning' : 'success', result.down > 0 ? `${result.down} monitor(s) down` : `All ${result.checked} monitor(s) checked`);
+    } catch (err) { 
+      console.error('Check failed:', err);
+      toast('error', 'Failed to check monitors: ' + (err.message || ''));
+    }
     setChecking(false);
   };
 
@@ -523,7 +547,7 @@ const Dashboard = () => {
         const iSnap = await db.collection('incidents').where('userId', '==', auth.currentUser.uid).limit(10).get();
         setIncidents(iSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       } catch (err) { console.error('Error loading data:', err); }
-      setChartData(generateChartData());
+      setChartData(buildChartDataFromHistory(monitorsList));
       setLoading(false);
     };
     loadData();
@@ -534,6 +558,7 @@ const Dashboard = () => {
       const up = monitorsList.filter(m => m.status === 'up' || m.status === 'pending' || !m.status).length;
       const down = monitorsList.filter(m => m.status === 'down').length;
       setStats(prev => ({ ...prev, total: monitorsList.length, up, down }));
+      setChartData(buildChartDataFromHistory(monitorsList));
     });
     return () => unsubscribe();
   }, []);
@@ -561,27 +586,31 @@ const Dashboard = () => {
           </div>
         ))}
       </div>
-      {stats.down > 0 && <div className="card-glass p-5 alert-banner border border-red-900"><div className="flex items-center gap-3"><span className="text-red-400">{ICONS.activity}</span><span className="font-bold text-red-400">{stats.down} monitor(s) experiencing issues</span></div></div>}
+      {stats.down > 0 && incidents.filter(i => !i.isResolved).length > 0 && (
+        <div className="card-glass p-5 alert-banner border border-red-900">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-red-400">{ICONS.activity}</span>
+            <span className="font-bold text-red-400">{stats.down} monitor(s) experiencing issues</span>
+          </div>
+          <div className="mt-3 space-y-2">
+            {incidents.filter(i => !i.isResolved).slice(0, 3).map(inc => (
+              <div key={inc.id} className="text-sm text-gray-300">
+                <span className="text-red-400">•</span> {inc.title || inc.monitorName} — {inc.description?.length > 80 ? inc.description.substring(0, 77) + '...' : inc.description}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {stats.down === 0 && (
+        <div className="card-glass p-5 alert-banner border border-green-900 bg-green-900/10">
+          <div className="flex items-center gap-3"><span className="text-green-400">✅</span><span className="font-bold text-green-400">All monitors operational</span></div>
+          <div className="text-sm text-gray-400 mt-1">No issues detected. All checks passing across all locations.</div>
+        </div>
+      )}
 <div className="card-glass p-6">
-          <div className="flex items-center justify-between mb-4"><h3 className="font-bold">🌍 Global Monitoring Map</h3><span className="text-xs text-gray-500">12 server locations worldwide</span></div>
-          <div className="relative bg-gray-900 rounded-lg overflow-hidden" style={{ height: '280px', background: 'linear-gradient(180deg, #0a1628 0%, #0f2847 100%)' }}>
-            <svg viewBox="0 0 1000 400" className="w-full h-full absolute inset-0" style={{ opacity: 0.3 }}>
-              <path d="M150,120 Q200,80 280,90 T380,100 T480,80 T580,90 T680,70 T780,85 T880,75 T950,85" fill="none" stroke="#1e3a5f" strokeWidth="2"/>
-              <path d="M100,200 Q200,180 300,200 T500,190 T700,210 T900,200" fill="none" stroke="#1e3a5f" strokeWidth="2"/>
-              <path d="M120,280 Q250,250 400,270 T650,260 T850,280" fill="none" stroke="#1e3a5f" strokeWidth="2"/>
-              <ellipse cx="500" cy="200" rx="400" ry="150" fill="none" stroke="#00F5FF" strokeWidth="0.5" strokeDasharray="5,5"/>
-            </svg>
-            <div className="relative z-10 grid grid-cols-4 gap-2 p-4 h-full">
-              {MONITORING_REGIONS.slice(0, 12).map(r => (
-                <div key={r.id} className="flex items-center gap-2 p-2 bg-white/5 rounded-lg backdrop-blur-sm">
-                  <div className="text-xl">{r.flag}</div>
-                  <div><div className="text-xs font-medium">{r.name}</div><div className="text-[10px] text-gray-500">{r.country}</div></div>
-                </div>
-              ))}
-            </div>
-            <div className="absolute bottom-2 left-4 right-4 flex justify-between text-xs text-gray-500">
-              <span>🌐 Africa</span><span>🌐 Europe</span><span>🌐 Americas</span><span>🌐 Asia Pacific</span>
-            </div>
+          <div className="flex items-center justify-between mb-4"><h3 className="font-bold">🌍 Global Monitoring Map</h3><span className="text-xs text-gray-500">Click markers to see details</span></div>
+          <div className="relative bg-gray-900 rounded-lg overflow-hidden" style={{ height: '350px' }}>
+            <LeafletMap monitors={monitors} userData={userData} />
           </div>
         </div>
         <div className="card-glass p-6">
@@ -629,11 +658,24 @@ const Dashboard = () => {
           <div className="space-y-3">
             {incidents.slice(0, 5).map(inc => (
               <div key={inc.id} className="p-3 bg-gray-900 rounded-lg flex items-center justify-between">
-                <div><div className="font-medium text-sm">{inc.monitorName}</div><div className="text-xs text-gray-500">{inc.reason}</div></div>
-                <span className={`text-xs px-2 py-0.5 rounded ${inc.isResolved ? 'bg-green-900 text-green-400' : 'bg-red-900 text-red-400'}`}>{inc.isResolved ? 'RESOLVED' : 'ONGOING'}</span>
+                <div>
+                  <div className="font-medium text-sm">{inc.monitorName}</div>
+                  <div className="text-xs text-gray-400">{inc.title || inc.reason}</div>
+                  {inc.affectedLocations && <div className="text-xs text-red-400 mt-1">❌ {inc.affectedLocations}</div>}
+                </div>
+                <div className="text-right">
+                  <span className={`text-xs px-2 py-0.5 rounded block mb-1 ${inc.isResolved ? 'bg-green-900 text-green-400' : 'bg-red-900 text-red-400'}`}>{inc.isResolved ? 'RESOLVED' : 'ONGOING'}</span>
+                  {inc.description && <span className="text-xs text-gray-500 block max-w-[150px] truncate">{inc.description}</span>}
+                </div>
               </div>
             ))}
-            {incidents.length === 0 && <div className="text-center py-6"><div className="text-3xl mb-2">✅</div><p className="text-gray-500 text-sm">No incidents recorded.<br/>All monitors are running smoothly!</p></div>}
+            {incidents.length === 0 && (
+              <div className="text-center py-8">
+                <div className="text-4xl mb-2">🎉</div>
+                <p className="text-gray-400">No incidents! Everything is running smoothly.</p>
+                <p className="text-xs text-gray-500 mt-2">All your monitors are responding correctly.</p>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -734,7 +776,7 @@ const AddMonitorPage = () => {
         alertContacts: [formData.alertEmail, ...formData.additionalEmails].filter(Boolean),
         slackWebhook: formData.slackWebhook, discordWebhook: formData.discordWebhook,
         alertAfterFailures: formData.alertAfterFailures, recoveryNotification: formData.recoveryNotification,
-        tags: formData.tags, isActive: true, status: 'pending', isPaused: false, uptimePercentage: 100, avgResponseMs: 0, checkHistory: [],
+        tags: formData.tags, isActive: true, status: 'pending', isPaused: false, avgResponseMs: 0, checkHistory: [], uptimeChecksTotal: 0, uptimeChecksPassed: 0, uptimePercentage: null,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
       await runTerminal(['✅ First ping successful!']);
@@ -761,8 +803,8 @@ const AddMonitorPage = () => {
         <div className="card-glass p-8">
           <div className="text-6xl mb-4">🎉</div>
           <h2 className="text-2xl font-bold mb-2" style={{ fontFamily: 'Syne' }}>Monitor Created!</h2>
-          <p className="text-gray-400 mb-2">PulseGrid is now watching <span className="text-cyan-400">{formData.name}</span> 24/7.</p>
-          <p className="text-gray-500 text-sm mb-6">You'll be alerted if it's down for more than 15 minutes.</p>
+          <p className="text-gray-400 mb-2">Monitor <span className="text-cyan-400">{formData.name}</span> created. The first server check will run within a minute.</p>
+          <p className="text-gray-500 text-sm mb-6">Alerts fire after {formData.alertAfterFailures || 3} consecutive failed checks.</p>
           <button onClick={() => navigate('dashboard')} className="btn-primary w-full py-3 mb-3">Go to Dashboard</button>
           <button onClick={() => { setShowSuccess(false); setStep(1); setFormData({ ...formData, name: '', url: '', method: 'GET', body: '', hasAuth: false, authValue: '', tags: [], alertEmail: auth.currentUser?.email || '', additionalEmails: [] }); }} className="btn-ghost w-full py-3">Add Another Monitor</button>
         </div>
@@ -969,6 +1011,7 @@ const MonitorsPage = () => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
+  const [showModal, setShowModal] = useState(null);
 
   useEffect(() => {
     if (!auth.currentUser) return;
@@ -983,30 +1026,230 @@ const MonitorsPage = () => {
   const handlePause = async (id) => { const m = monitors.find(x => x.id === id); await db.collection('monitors').doc(id).update({ isPaused: !m.isPaused }); };
   const filtered = monitors.filter(m => { const matchSearch = m.name.toLowerCase().includes(search.toLowerCase()); const matchFilter = filter === 'all' || m.status === filter || (filter === 'up' && (!m.status || m.status === 'up' || m.status === 'pending')) || (filter === 'paused' && m.isPaused); return matchSearch && matchFilter; });
 
+  const getStatusClass = (s) => {
+    if (!s || s === 'up' || s === 'pending') return 'up';
+    return s;
+  };
+
+  const getStatusLabel = (s) => {
+    if (!s || s === 'up' || s === 'pending') return 'UP';
+    if (s === 'pending') return 'CHECKING...';
+    return s.toUpperCase();
+  };
+
+  const getStatusIcon = (s) => {
+    if (!s || s === 'up' || s === 'pending') return '✅';
+    if (s === 'down') return '🔴';
+    if (s === 'slow') return '🟡';
+    if (s === 'degraded') return '⚠️';
+    if (s === 'critical_warning') return '🚨';
+    if (s === 'pending') return '🔄';
+    if (s === 'paused') return '⏸️';
+    return '❓';
+  };
+
+  const getStatusExplanation = (m) => {
+    if (m.isPaused) return 'Monitoring paused — click Resume to restart';
+    if (!m.status || m.status === 'up') return 'Responding normally from all locations';
+    if (m.status === 'down') return 'Not responding — server may be offline';
+    if (m.status === 'slow') return 'Responding but slower than your ' + (m.maxResponseMs || 3000) + 'ms threshold';
+    if (m.status === 'degraded') return 'Responding but content checks are failing';
+    if (m.status === 'critical_warning') {
+      if (m.lastError?.includes('SSL') || m.lastError?.includes('ssl')) return 'SSL certificate expiring — renew urgently';
+      return m.lastError || 'Needs urgent attention';
+    }
+    return 'First check hasn\'t run yet — results in ~5 minutes';
+  };
+
+  const getActionButton = (m) => {
+    if (m.isPaused) return null;
+    if (m.status === 'down' || m.status === 'degraded' || m.status === 'critical_warning' || m.status === 'slow') {
+      let label = '🔍 ';
+      let modalTitle = '';
+      if (m.status === 'down') { label += 'Check Server Status'; modalTitle = 'Quick diagnosis for ' + m.name; }
+      else if (m.status === 'degraded') { label += 'What\'s Wrong?'; modalTitle = 'Content check failure details'; }
+      else if (m.status === 'critical_warning') { label += 'Fix SSL Certificate'; modalTitle = 'SSL Certificate Warning'; }
+      else if (m.status === 'slow') { label += '⚡ Speed Tips'; modalTitle = 'Speed Improvement Tips'; }
+      return <button onClick={() => setShowModal({ monitor: m, type: m.status })} className="text-xs text-cyan-400 hover:text-cyan-300 mt-2">{label}</button>;
+    }
+    return null;
+  };
+
   if (loading) return <div className="p-6 flex items-center justify-center min-h-[60vh]"><div className="w-16 h-16 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin"></div></div>;
+
+  const statusCounts = {
+    up: monitors.filter(m => !m.isPaused && (!m.status || m.status === 'up' || m.status === 'pending')).length,
+    down: monitors.filter(m => !m.isPaused && m.status === 'down').length,
+    slow: monitors.filter(m => !m.isPaused && m.status === 'slow').length,
+    degraded: monitors.filter(m => !m.isPaused && m.status === 'degraded').length,
+    critical: monitors.filter(m => !m.isPaused && m.status === 'critical_warning').length,
+    paused: monitors.filter(m => m.isPaused).length
+  };
 
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold">Monitors</h1><p className="text-sm text-gray-400">{monitors.length} total monitors</p></div></div>
+
+      <div className="flex flex-wrap gap-2">
+        {statusCounts.up === monitors.length - statusCounts.paused && statusCounts.down === 0 ? (
+          <div className="status-pill active bg-green-500/20 text-green-400 border border-green-500/30 px-3 py-2">✅ All systems operational</div>
+        ) : (
+          <>
+            {statusCounts.up > 0 && <button onClick={() => setFilter(filter === 'up' ? 'all' : 'up')} className={`status-pill ${filter === 'up' ? 'active bg-green-500/30' : 'bg-green-500/10'} text-green-400 border border-green-500/30 hover:bg-green-500/20`}>✅ {statusCounts.up} UP</button>}
+            {statusCounts.down > 0 && <button onClick={() => setFilter(filter === 'down' ? 'all' : 'down')} className={`status-pill ${filter === 'down' ? 'active bg-red-500/30' : 'bg-red-500/10'} text-red-400 border border-red-500/30 hover:bg-red-500/20`}>🔴 {statusCounts.down} DOWN</button>}
+            {statusCounts.critical > 0 && <button onClick={() => setFilter(filter === 'critical_warning' ? 'all' : 'critical_warning')} className={`status-pill ${filter === 'critical_warning' ? 'active bg-red-500/40' : 'bg-red-500/15'} text-red-400 border border-red-500/50 hover:bg-red-500/25`}>🚨 {statusCounts.critical} CRITICAL</button>}
+            {statusCounts.slow > 0 && <button onClick={() => setFilter(filter === 'slow' ? 'all' : 'slow')} className={`status-pill ${filter === 'slow' ? 'active bg-amber-500/30' : 'bg-amber-500/10'} text-amber-400 border border-amber-500/30 hover:bg-amber-500/20`}>🟡 {statusCounts.slow} SLOW</button>}
+            {statusCounts.degraded > 0 && <button onClick={() => setFilter(filter === 'degraded' ? 'all' : 'degraded')} className={`status-pill ${filter === 'degraded' ? 'active bg-orange-500/30' : 'bg-orange-500/10'} text-orange-400 border border-orange-500/30 hover:bg-orange-500/20`}>⚠️ {statusCounts.degraded} DEGRADED</button>}
+            {statusCounts.paused > 0 && <button onClick={() => setFilter(filter === 'paused' ? 'all' : 'paused')} className={`status-pill ${filter === 'paused' ? 'active bg-gray-500/30' : 'bg-gray-500/10'} text-gray-400 border border-gray-500/30 hover:bg-gray-500/20`}>⏸️ {statusCounts.paused} PAUSED</button>}
+          </>
+        )}
+      </div>
+
       <div className="flex flex-col md:flex-row gap-4">
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search monitors..." className="input-field flex-1" />
-        <select value={filter} onChange={e => setFilter(e.target.value)} className="input-field"><option value="all">All Status</option><option value="up">Up</option><option value="down">Down</option><option value="paused">Paused</option></select>
+        <select value={filter} onChange={e => setFilter(e.target.value)} className="input-field"><option value="all">All Status</option><option value="up">Up</option><option value="down">Down</option><option value="slow">Slow</option><option value="degraded">Degraded</option><option value="critical_warning">Critical</option><option value="paused">Paused</option></select>
       </div>
+
       <div className="card-glass overflow-hidden">
         <table className="w-full">
           <thead className="bg-gray-900"><tr><th className="p-4 text-left text-sm text-gray-400">Monitor</th><th className="p-4 text-left text-sm text-gray-400">Status</th><th className="p-4 text-left text-sm text-gray-400">Actions</th></tr></thead>
           <tbody>
-            {filtered.length === 0 && <tr><td colSpan="3" className="p-8 text-center text-gray-500">No monitors found</td></tr>}
+            {filtered.length === 0 && (
+              <tr>
+                <td colSpan="3" className="p-8 text-center">
+                  <div className="text-4xl mb-4">📡</div>
+                  <p className="text-gray-400 mb-4">No monitors found</p>
+                  {(search || filter !== 'all') ? (
+                    <button onClick={() => { setSearch(''); setFilter('all'); }} className="text-cyan-400 hover:text-cyan-300">Clear filters</button>
+                  ) : (
+                    <button onClick={() => navigate('add-monitor')} className="btn-primary">Add Your First Monitor</button>
+                  )}
+                </td>
+              </tr>
+            )}
             {filtered.map(m => (
               <tr key={m.id} className="border-t border-gray-800 hover:bg-gray-900/50">
                 <td className="p-4"><div className="font-medium">{m.name}</div><div className="text-xs text-gray-500">{m.url}</div></td>
-                <td className="p-4"><span className={`status-badge ${m.isPaused ? 'paused' : m.status === 'up' || m.status === 'pending' || !m.status ? 'up' : m.status === 'slow' ? 'slow' : 'down'}`}><span className={`pulse-dot ${m.isPaused ? 'gray' : m.status === 'up' || m.status === 'pending' || !m.status ? 'green' : m.status === 'slow' ? 'amber' : 'red'}`}></span>{m.isPaused ? 'PAUSED' : m.status === 'pending' || !m.status ? 'UP' : m.status.toUpperCase()}</span></td>
+                <td className="p-4">
+                  <span className={`status-badge ${m.isPaused ? 'paused' : getStatusClass(m.status)}`}><span className={`pulse-dot ${m.isPaused ? 'gray' : m.status === 'up' || !m.status || m.status === 'pending' ? 'green' : m.status === 'slow' ? 'amber' : 'red'}`}></span>{m.isPaused ? 'PAUSED' : getStatusLabel(m.status)}</span>
+                  <div className="status-explanation mt-1">{getStatusExplanation(m)}</div>
+                  {getActionButton(m) && <div>{getActionButton(m)}</div>}
+                </td>
                 <td className="p-4"><div className="flex gap-2"><button onClick={() => handlePause(m.id)} className="p-2 hover:bg-gray-800 rounded">{m.isPaused ? ICONS.radio : ICONS.pause}</button><button onClick={() => handleDelete(m.id)} className="p-2 hover:bg-red-900 rounded text-red-400">{ICONS.trash}</button></div></td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      <div className="pt-10 mt-10 border-t border-cyan-500/20">
+        <h2 className="text-xl font-bold mb-2" style={{ fontFamily: 'Orbitron', color: '#00F5FF' }}>Understanding Monitor Statuses</h2>
+        <p className="text-sm text-gray-400 mb-6">What each status means and what you should do</p>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="card-glass p-4 border-green-500/20 hover:border-green-500/40">
+            <div className="flex items-center gap-2 mb-2"><span className="status-badge up">✅ UP</span></div>
+            <h3 className="font-medium text-green-400 mb-2">Everything is working perfectly</h3>
+            <p className="text-sm text-gray-400 mb-2">Your monitor is responding correctly from all checked locations. No action is needed.</p>
+            <p className="text-xs text-gray-500">Example: "Response: 200 OK in 234ms from all locations"</p>
+          </div>
+          
+          <div className="card-glass p-4 border-red-500/20 hover:border-red-500/40">
+            <div className="flex items-center gap-2 mb-2"><span className="status-badge down">🔴 DOWN</span></div>
+            <h3 className="font-medium text-red-400 mb-2">Your service is completely unreachable</h3>
+            <p className="text-sm text-gray-400 mb-2">Users cannot access your service. Check your server/hosting is running.</p>
+            <p className="text-xs text-gray-500">Example: "Connection timed out — no response after 30 seconds"</p>
+          </div>
+          
+          <div className="card-glass p-4 border-amber-500/20 hover:border-amber-500/40">
+            <div className="flex items-center gap-2 mb-2"><span className="status-badge slow">🟡 SLOW</span></div>
+            <h3 className="font-medium text-amber-400 mb-2">Working but taking too long to respond</h3>
+            <p className="text-sm text-gray-400 mb-2">Service is slow. Check CPU/memory usage and database queries.</p>
+            <p className="text-xs text-gray-500">Example: "Response took 4,230ms — threshold is 3,000ms"</p>
+          </div>
+          
+          <div className="card-glass p-4 border-orange-500/20 hover:border-orange-500/40">
+            <div className="flex items-center gap-2 mb-2"><span className="status-badge degraded">⚠️ DEGRADED</span></div>
+            <h3 className="font-medium text-orange-400 mb-2">Loading but something is wrong inside</h3>
+            <p className="text-sm text-gray-400 mb-2">Server is running but returning unexpected content.</p>
+            <p className="text-xs text-gray-500">Example: "Content check failed — unexpected error message"</p>
+          </div>
+          
+          <div className="card-glass p-4 border-red-500/30 hover:border-red-500/50">
+            <div className="flex items-center gap-2 mb-2"><span className="status-badge critical_warning">🚨 CRITICAL</span></div>
+            <h3 className="font-medium text-red-400 mb-2">Needs urgent attention</h3>
+            <p className="text-sm text-gray-400 mb-2">SSL certificate expiring soon. Renew immediately.</p>
+            <p className="text-xs text-gray-500">Example: "SSL expires in 6 days"</p>
+          </div>
+          
+          <div className="card-glass p-4 border-cyan-500/20 hover:border-cyan-500/40">
+            <div className="flex items-center gap-2 mb-2"><span className="status-badge pending">🔄 CHECKING...</span></div>
+            <h3 className="font-medium text-cyan-400 mb-2">Waiting for first check</h3>
+            <p className="text-sm text-gray-400 mb-2">First check will run within 5 minutes.</p>
+            <p className="text-xs text-gray-500">Example: "Monitor was just created"</p>
+          </div>
+          
+          <div className="card-glass p-4 border-gray-500/30 hover:border-gray-500/50 md:col-span-2">
+            <div className="flex items-center gap-2 mb-2"><span className="status-badge paused">⏸️ PAUSED</span></div>
+            <h3 className="font-medium text-gray-400 mb-2">Monitoring is temporarily stopped</h3>
+            <p className="text-sm text-gray-400 mb-2">You paused this monitor. Click Resume to restart checking.</p>
+            <p className="text-xs text-gray-500">Example: "Paused manually by user"</p>
+          </div>
+        </div>
+      </div>
+
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setShowModal(null)}>
+          <div className="bg-[#0D0D18] border border-gray-700 rounded-xl p-6 max-w-md w-full" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-bold mb-4">{showModal.type === 'down' ? '🔴 Server Down' : showModal.type === 'degraded' ? '⚠️ Content Issue' : showModal.type === 'critical_warning' ? '🔒 SSL Warning' : '⚡ Speed Tips'}</h3>
+            <div className="text-sm text-gray-300 space-y-3">
+              {showModal.type === 'down' && (
+                <>
+                  <p><strong>Quick checklist for {showModal.monitor.name}:</strong></p>
+                  <ul className="list-disc list-inside space-y-2 text-gray-400">
+                    <li>Open {showModal.monitor.url} in your browser — can you see it?</li>
+                    <li>Check your hosting dashboard for errors</li>
+                    <li>Verify your domain has not expired</li>
+                    <li>Check server logs for crash messages</li>
+                    <li>Try restarting your server/application</li>
+                  </ul>
+                </>
+              )}
+              {showModal.type === 'degraded' && (
+                <>
+                  <p><strong>Content check failed:</strong></p>
+                  <p className="text-gray-400">{showModal.monitor.lastError || 'Content validation failed'}</p>
+                  <p className="mt-2">Check your application is serving expected content.</p>
+                </>
+              )}
+              {showModal.type === 'critical_warning' && (
+                <>
+                  <p><strong>Your SSL certificate needs attention.</strong></p>
+                  <p className="text-gray-400 mt-2">How to fix:</p>
+                  <ul className="list-disc list-inside space-y-1 text-gray-400 mt-1">
+                    <li>Vercel/Netlify: auto-renews — check dashboard for errors</li>
+                    <li>Firebase: Check Hosting → SSL settings</li>
+                    <li>Self-hosted: Run <code>sudo certbot renew</code></li>
+                    <li>Then restart: <code>sudo systemctl restart nginx</code></li>
+                  </ul>
+                </>
+              )}
+              {showModal.type === 'slow' && (
+                <>
+                  <p><strong>Speed tips for {showModal.monitor.name}:</strong></p>
+                  <ul className="list-disc list-inside space-y-1 text-gray-400">
+                    <li>Check server CPU and memory usage</li>
+                    <li>Look for slow database queries</li>
+                    <li>Add caching to your application</li>
+                    <li>Check if hosting plan is maxed out</li>
+                  </ul>
+                </>
+              )}
+            </div>
+            <button onClick={() => setShowModal(null)} className="btn-primary w-full mt-4">Got it</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -1021,7 +1264,7 @@ const StatusPagesPage = () => {
   const [showHelp, setShowHelp] = useState(true);
   const [formData, setFormData] = useState({
     name: '', slug: '', customDomain: '', brandColor: '#00F5FF',
-    companyDescription: 'We monitor our systems 24/7 to ensure reliability. This page shows the real-time status of all our services.',
+    companyDescription: 'We monitor our systems continuously to ensure reliability. This page shows the real-time status of all our services.',
     supportEmail: '', website: '', twitter: '', discord: '',
     showResponseTimes: true, showUptimePercentage: true, showIncidentHistory: true, allowSubscriptions: true, darkMode: true,
     selectedMonitors: [], headerLinks: [], footerLinks: []
@@ -1034,7 +1277,7 @@ const StatusPagesPage = () => {
     return () => { unsubPages(); unsubMonitors(); };
   }, [navigate]);
 
-  const createNew = () => { setEditingPage({ id: null }); setFormData({ name: '', slug: '', customDomain: '', brandColor: '#00F5FF', companyDescription: 'We monitor our systems 24/7 to ensure reliability. This page shows the real-time status of all our services.', supportEmail: '', website: '', twitter: '', discord: '', showResponseTimes: true, showUptimePercentage: true, showIncidentHistory: true, allowSubscriptions: true, darkMode: true, selectedMonitors: [], headerLinks: [], footerLinks: [] }); };
+  const createNew = () => { setEditingPage({ id: null }); setFormData({ name: '', slug: '', customDomain: '', brandColor: '#00F5FF', companyDescription: 'We monitor our systems continuously to ensure reliability. This page shows the real-time status of all our services.', supportEmail: '', website: '', twitter: '', discord: '', showResponseTimes: true, showUptimePercentage: true, showIncidentHistory: true, allowSubscriptions: true, darkMode: true, selectedMonitors: [], headerLinks: [], footerLinks: [] }); };
   const editPage = (page) => { setEditingPage(page); setFormData({ name: page.name || '', slug: page.slug || '', customDomain: page.customDomain || '', brandColor: page.brandColor || '#00F5FF', companyDescription: page.companyDescription || '', supportEmail: page.supportEmail || '', website: page.website || '', twitter: page.twitter || '', discord: page.discord || '', showResponseTimes: page.showResponseTimes ?? true, showUptimePercentage: page.showUptimePercentage ?? true, showIncidentHistory: page.showIncidentHistory ?? true, allowSubscriptions: page.allowSubscriptions ?? true, darkMode: page.darkMode ?? true, selectedMonitors: page.selectedMonitors || [], headerLinks: page.headerLinks || [], footerLinks: page.footerLinks || [] }); };
   const deletePage = async (id) => { setConfirmModal({ title: 'Delete status page?', message: 'This will permanently delete this status page.', onConfirm: async () => { setConfirmModal(null); await db.collection('statusPages').doc(id).delete(); toast('success', 'Status page deleted'); }, danger: true, confirmText: 'Delete', cancelText: 'Cancel' }); };
   const savePage = async () => { if (!formData.name || !formData.slug) { toast('error', 'Name and URL slug required'); return; } const data = { ...formData, userId: auth.currentUser.uid, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }; if (editingPage.id) { await db.collection('statusPages').doc(editingPage.id).update(data); toast('success', 'Status page updated!'); } else { await db.collection('statusPages').add({ ...data, isPublished: false, createdAt: firebase.firestore.FieldValue.serverTimestamp() }); toast('success', 'Status page created!'); } setEditingPage(null); };
@@ -1178,7 +1421,8 @@ const ReportPreviewContent = ({ activeReport, monitors, selectedMonitors }) => {
     ? selectedMonitors.map(id => monitors.find(m => m.id === id)).filter(Boolean)
     : monitors;
   const periodLabel = activeReport === 'daily' ? 'Yesterday' : activeReport === 'weekly' ? 'Last 7 Days' : activeReport === 'monthly' ? 'Last 30 Days' : 'Custom Range';
-  const avgUptime = reportMonitors.length > 0 ? (reportMonitors.reduce((a, m) => a + (m.uptimePercentage || 100), 0) / reportMonitors.length).toFixed(1) : '100.0';
+  const uptimes = reportMonitors.map(m => m.uptimePercentage).filter(u => typeof u === 'number' && isFinite(u));
+  const avgUptime = uptimes.length > 0 ? (uptimes.reduce((a, u) => a + u, 0) / uptimes.length).toFixed(1) : null;
   const avgResponse = reportMonitors.length > 0 ? Math.round(reportMonitors.reduce((a, m) => a + (m.avgResponseMs || 0), 0) / reportMonitors.length) : 0;
   const downCount = reportMonitors.filter(m => m.status === 'down').length;
 
@@ -1186,7 +1430,7 @@ const ReportPreviewContent = ({ activeReport, monitors, selectedMonitors }) => {
     <div>
       <div className="text-sm text-gray-400 mb-3">{periodLabel} • {reportMonitors.length} monitors</div>
       <div className="grid grid-cols-2 gap-4 text-sm">
-        <div><span className="text-gray-400">Avg Uptime</span><div className="font-bold text-green-400">{avgUptime}%</div></div>
+        <div><span className="text-gray-400">Avg Uptime</span><div className="font-bold text-green-400">{avgUptime !== null ? avgUptime + '%' : 'No data'}</div></div>
         <div><span className="text-gray-400">Down Monitors</span><div className={`font-bold ${downCount > 0 ? 'text-red-400' : 'text-green-400'}`}>{downCount}</div></div>
         <div><span className="text-gray-400">Avg Response</span><div className="font-bold">{avgResponse}ms</div></div>
         <div><span className="text-gray-400">Total Monitors</span><div className="font-bold">{reportMonitors.length}</div></div>
@@ -1214,38 +1458,10 @@ const sendReportEmail = async (activeReport, monitors, selectedMonitors) => {
     ? selectedMonitors.map(id => monitors.find(m => m.id === id)).filter(Boolean)
     : monitors;
   if (reportMonitors.length === 0) { alert('No monitors to include in report'); return; }
-
-  const email = auth.currentUser?.email;
-  if (!email) { alert('Please sign in to send reports'); return; }
-
-  const periodLabel = activeReport === 'daily' ? 'Daily Report' : activeReport === 'weekly' ? 'Weekly Report' : activeReport === 'monthly' ? 'Monthly Report' : 'Custom Report';
-  const avgUptime = reportMonitors.length > 0 ? (reportMonitors.reduce((a, m) => a + (m.uptimePercentage || 100), 0) / reportMonitors.length).toFixed(1) : '100.0';
-
-  const RESEND_API_KEY = 're_Hy1TH7nk_EhqPzuus64koJmTbnqvGKebr';
-  const htmlContent = `
-<div style="font-family: Arial, sans-serif; background: #050508; color: #E8E8F0; padding: 20px;">
-<div style="max-width: 600px; margin: 0 auto; background: #0D0D18; border-radius: 12px; padding: 30px;">
-<h1 style="color: #00F5FF; margin-bottom: 20px;">PulseGrid ${periodLabel}</h1>
-<table style="width:100%;border-collapse:collapse;">
-<tr><td style="padding:10px;background:#1A1A2E;border-radius:8px;"><div style="color:#00F5FF;font-size:24px;font-weight:bold;">${avgUptime}%</div><div style="color:#888;font-size:12px;">Avg Uptime</div></td>
-<td style="padding:10px;background:#1A1A2E;border-radius:8px;"><div style="color:#00F5FF;font-size:24px;font-weight:bold;">${reportMonitors.length}</div><div style="color:#888;font-size:12px;">Monitors</div></td></tr>
-</table>
-<h2 style="color:#00F5FF;margin:20px 0 10px;">Monitor Status</h2>
-<table style="width:100%;border-collapse:collapse;font-size:12px;">
-<tr style="background:#1A1A2E;"><th style="padding:8px;text-align:left;">Name</th><th style="padding:8px;text-align:left;">Status</th><th style="padding:8px;text-align:left;">Uptime</th></tr>
-${reportMonitors.map(m => `<tr><td style="padding:8px;border-bottom:1px solid #1A1A2E;">${m.name}</td><td style="padding:8px;border-bottom:1px solid #1A1A2E;color:${m.status === 'down' ? '#FF3366' : '#39FF14'};">${m.status === 'down' ? 'DOWN' : 'UP'}</td><td style="padding:8px;border-bottom:1px solid #1A1A2E;">${(m.uptimePercentage || 100).toFixed(1)}%</td></tr>`).join('')}
-</table>
-<p style="color:#666;font-size:11px;margin-top:20px;">Generated by PulseGrid on ${new Date().toLocaleString()}</p>
-</div></div>`;
-
   try {
-    await fetch('https://corsproxy.io/?https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + RESEND_API_KEY, 'X-Requested-With': 'XMLHttpRequest' },
-      body: JSON.stringify({ from: 'PulseGrid Reports <reports@resend.dev>', to: email, subject: 'PulseGrid Report - ' + periodLabel, html: htmlContent })
-    });
-    alert('Report sent to ' + email);
-  } catch (err) { alert('Failed to send report: ' + err.message); }
+    const result = await callMonitoringApi({ action: 'sendReportEmail', reportType: activeReport, monitorIds: reportMonitors.map(m => m.id) });
+    alert('Report sent to ' + (result.to || auth.currentUser?.email || 'your email'));
+  } catch (err) { alert('Failed to send report: ' + (err.message || '')); }
 };
 
 // Reports Page
@@ -1268,10 +1484,11 @@ const ReportsPage = () => {
   const generateReportHTML = (reportType, monitorList) => {
     const now = new Date().toLocaleString();
     const periodLabel = reportType === 'daily' ? 'Yesterday' : reportType === 'weekly' ? 'Last 7 Days' : reportType === 'monthly' ? 'Last 30 Days' : 'Custom Range';
-    const avgUptime = monitorList.length > 0 ? (monitorList.reduce((a, m) => a + (m.uptimePercentage || 100), 0) / monitorList.length).toFixed(2) : '100.00';
+    const uptimes = monitorList.map(m => m.uptimePercentage).filter(u => typeof u === 'number' && isFinite(u));
+    const avgUptime = uptimes.length > 0 ? (uptimes.reduce((a, u) => a + u, 0) / uptimes.length).toFixed(2) : 'No data';
     const avgResponse = monitorList.length > 0 ? Math.round(monitorList.reduce((a, m) => a + (m.avgResponseMs || 0), 0) / monitorList.length) : 0;
-    const totalOutages = 0;
-    const totalChecks = monitorList.length * 1440;
+    const totalChecks = monitorList.reduce((a, m) => a + (Number(m.uptimeChecksTotal) || 0), 0);
+    const failedChecks = monitorList.reduce((a, m) => a + Math.max(0, (Number(m.uptimeChecksTotal) || 0) - (Number(m.uptimeChecksPassed) || 0)), 0);
     const downMonitors = monitorList.filter(m => m.status === 'down');
 
     let html = `
@@ -1313,12 +1530,12 @@ const ReportsPage = () => {
       <h2>Overview</h2>
       <div class="stats-grid">
         <div class="stat-box">
-          <div class="value">${avgUptime}%</div>
+          <div class="value">${uptimes.length > 0 ? avgUptime + '%' : 'No data'}</div>
           <div class="label">Avg Uptime</div>
         </div>
         <div class="stat-box">
-          <div class="value">${totalOutages}</div>
-          <div class="label">Outages</div>
+          <div class="value">${totalChecks > 0 ? failedChecks : 'No data'}</div>
+          <div class="label">${totalChecks > 0 ? 'Failed Checks (of ' + totalChecks + ')' : 'No checks recorded'}</div>
         </div>
         <div class="stat-box">
           <div class="value">${avgResponse}ms</div>
@@ -1348,7 +1565,7 @@ const ReportsPage = () => {
           <tr>
             <td><strong>${m.name}</strong></td>
             <td style="color:#888;font-size:12px;">${(m.url || '').substring(0, 30)}</td>
-            <td class="status-up">${(m.uptimePercentage || 100).toFixed(2)}%</td>
+            <td class="status-up">${typeof m.uptimePercentage === 'number' ? m.uptimePercentage.toFixed(2) + '%' : 'No data'}</td>
             <td>${m.avgResponseMs || 0}ms</td>
             <td class="${m.status === 'down' ? 'status-down' : 'status-up'}">${m.status === 'down' ? 'DOWN' : 'UP'}</td>
           </tr>
@@ -1402,7 +1619,7 @@ const ReportsPage = () => {
           ${monitorList.filter(m => m.status !== 'down').map(m => `
           <tr>
             <td><strong>${m.name}</strong></td>
-            <td class="status-up">${(m.uptimePercentage || 100).toFixed(2)}%</td>
+            <td class="status-up">${typeof m.uptimePercentage === 'number' ? m.uptimePercentage.toFixed(2) + '%' : 'No data'}</td>
             <td>0h 00m 00s</td>
             <td>0</td>
             <td>${m.avgResponseMs || 0}ms</td>
@@ -1842,8 +2059,14 @@ const MonitorDetailPage = ({ monitorId }) => {
     setTestLoading(true);
     setShowTestModal(true);
     setTestResult(null);
-    await new Promise(r => setTimeout(r, 1500));
-    setTestResult({ status: 200, time: Math.floor(Math.random() * 300) + 50, ok: true });
+    try {
+      const r = await callMonitoringApi({ action: 'checkMonitor', monitorId: monitor.id });
+      const rr = r.result || {};
+      const fullLoad = (rr.checks && rr.checks.fullLoad) || {};
+      setTestResult({ status: fullLoad.statusCode || (rr.status === 'down' ? 'FAILED' : 200), time: rr.responseTimeMs || 0, ok: rr.status !== 'down', checks: rr.checks || {} });
+    } catch (err) {
+      setTestResult({ status: 'FAILED', time: 0, ok: false, error: err.message });
+    }
     setTestLoading(false);
   };
 
@@ -1852,8 +2075,19 @@ const MonitorDetailPage = ({ monitorId }) => {
   const getStatusColor = (s) => s === 'up' ? '#39FF14' : s === 'down' ? '#FF3366' : s === 'slow' ? '#FFB800' : '#6B6B8A';
   const getStatusClass = (s) => !s || s === 'up' || s === 'pending' ? 'up' : s === 'down' ? 'down' : s === 'slow' ? 'slow' : 'paused';
 
-  const uptime24h = monitor?.uptimePercentage?.toFixed(2) || '100.00';
-  const uptime30d = monitor?.uptimePercentage?.toFixed(2) || '100.00';
+  const uptime24h = typeof monitor?.uptimePercentage === 'number' ? monitor.uptimePercentage.toFixed(2) : null;
+  const uptime30d = uptime24h;
+  // Real per-entry response chart + per-day uptime grid, both from checkHistory only
+  const history = (monitor?.checkHistory || []).slice().sort((a, b) => new Date(a.time) - new Date(b.time));
+  const chartPoints = history.slice(-24).map(h => ({ time: new Date(h.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), status: h.status || 'unknown', response: h.responseTimeMs || 0 }));
+  const dayMap = {};
+  history.forEach(h => {
+    const key = new Date(h.time).toISOString().slice(0, 10);
+    if (!dayMap[key]) dayMap[key] = { total: 0, up: 0 };
+    dayMap[key].total++;
+    if (h.status !== 'down') dayMap[key].up++;
+  });
+  const dayGrid = Object.keys(dayMap).sort().slice(-90).map(date => ({ date, uptime: dayMap[date].total > 0 ? (dayMap[date].up / dayMap[date].total) * 100 : 100 }));
   const avgResponse = monitor?.avgResponseMs || 0;
 
   const tabs = [
@@ -1894,11 +2128,11 @@ const MonitorDetailPage = ({ monitorId }) => {
         </div>
         <div className="card-glass p-4">
           <div className="text-xs text-gray-400 mb-1">Uptime 24h</div>
-          <div className="text-xl font-bold text-green-400">{uptime24h}%</div>
+          <div className="text-xl font-bold text-green-400">{uptime24h !== null ? uptime24h + '%' : 'No data'}</div>
         </div>
         <div className="card-glass p-4">
           <div className="text-xs text-gray-400 mb-1">Uptime 30d</div>
-          <div className="text-xl font-bold text-green-400">{uptime30d}%</div>
+          <div className="text-xl font-bold text-green-400">{uptime30d !== null ? uptime30d + '%' : 'No data'}</div>
         </div>
         <div className="card-glass p-4">
           <div className="text-xs text-gray-400 mb-1">Avg Response</div>
@@ -1920,29 +2154,37 @@ const MonitorDetailPage = ({ monitorId }) => {
         <div className="space-y-6">
           <div className="card-glass p-6">
             <h3 className="font-bold mb-4">Response Time (24h)</h3>
-            <div className="h-40 flex items-end gap-1">
-              {Array.from({ length: 24 }, (_, i) => (
-                <div key={i} className="flex-1 bg-cyan-500/60" style={{ height: `${30 + Math.random() * 60}%` }}></div>
-              ))}
-            </div>
+            {chartPoints.length > 0 ? (
+              <div className="h-40 flex items-end gap-1">
+                {chartPoints.map((p, i) => (
+                  <div key={i} title={`${p.time} — ${p.status}${p.response ? ` (${p.response}ms)` : ''}`} className={`flex-1 ${p.status === 'down' ? 'bg-red-500/70' : p.status === 'slow' ? 'bg-amber-500/70' : 'bg-cyan-500/60'}`} style={{ height: `${Math.max(10, Math.min(100, p.response / 10))}%` }}></div>
+                ))}
+              </div>
+            ) : (
+              <div className="h-40 flex items-center justify-center text-gray-500 text-sm">No checks recorded yet — run a check to see real response times</div>
+            )}
             <div className="flex justify-between text-xs text-gray-500 mt-2">
-              <span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>23:59</span>
+              <span>{chartPoints[0]?.time || '—'}</span><span>{chartPoints[Math.floor(chartPoints.length / 2)]?.time || ''}</span><span>{chartPoints[chartPoints.length - 1]?.time || ''}</span>
             </div>
           </div>
           <div className="card-glass p-6">
             <h3 className="font-bold mb-4">Last 90 Days</h3>
-            <div className="grid grid-cols-13 gap-1">
-              {Array.from({ length: 90 }, (_, i) => (
-                <div key={i} className="aspect-square rounded-sm" style={{ background: Math.random() > 0.1 ? '#39FF14' : '#1A1A2E' }}></div>
-              ))}
-            </div>
+            {dayGrid.length > 0 ? (
+              <div className="grid grid-cols-13 gap-1">
+                {dayGrid.map((d, i) => (
+                  <div key={i} title={d.date} className="aspect-square rounded-sm" style={{ background: d.uptime >= 99.9 ? '#39FF14' : d.uptime >= 95 ? '#FFB800' : '#FF3366' }}></div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-gray-500 text-sm">No check history yet — days appear here after checks run</div>
+            )}
           </div>
           <div className="card-glass p-6">
             <h3 className="font-bold mb-4">SLA Tracking</h3>
             <div className="grid md:grid-cols-3 gap-4">
-              <div><div className="text-sm text-gray-400">Uptime</div><div className="text-2xl font-bold text-green-400">{uptime30d}%</div></div>
+              <div><div className="text-sm text-gray-400">Uptime</div><div className="text-2xl font-bold text-green-400">{uptime30d !== null ? uptime30d + '%' : 'No data'}</div></div>
               <div><div className="text-sm text-gray-400">SLA Target</div><div className="text-2xl font-bold">{monitor?.slaTarget || 99.9}%</div></div>
-              <div><div className="text-sm text-gray-400">Status</div><div className="text-xl font-bold text-green-400">✅ MEETING SLA</div></div>
+              <div><div className="text-sm text-gray-400">Status</div><div className={`text-xl font-bold ${uptime30d === null ? 'text-gray-400' : parseFloat(uptime30d) >= (monitor?.slaTarget || 99.9) ? 'text-green-400' : 'text-red-400'}`}>{uptime30d === null ? 'NO DATA' : parseFloat(uptime30d) >= (monitor?.slaTarget || 99.9) ? '✅ MEETING SLA' : '❌ BELOW SLA'}</div></div>
             </div>
           </div>
         </div>
@@ -1985,15 +2227,96 @@ const MonitorDetailPage = ({ monitorId }) => {
           {incidents.length === 0 ? (
             <p className="text-center text-gray-400 py-8">🎉 No incidents! This monitor has been running smoothly.</p>
           ) : (
-            <div className="space-y-3">
-              {incidents.map(inc => (
-                <div key={inc.id} className="p-3 bg-gray-900 rounded-lg">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">{inc.reason || 'Downtime'}</span>
-                    <span className="text-xs text-gray-500">{inc.startedAt?.toDate?.()?.toLocaleDateString()}</span>
+            <div className="space-y-4">
+              {incidents.map(inc => {
+                const checkResults = inc.checkResults || {};
+                const checks = checkResults;
+                const failedChecks = [];
+                const passedChecks = [];
+                
+                if (checks.connectivity?.passed === false) failedChecks.push('Connectivity — ' + (checks.connectivity.error || 'Failed'));
+                else if (checks.connectivity) passedChecks.push('Connectivity');
+                
+                if (checks.fullLoad?.passed === false) failedChecks.push('Full page load — ' + (checks.fullLoad.error || 'Failed'));
+                else if (checks.fullLoad) passedChecks.push('Full page load');
+                
+                if (checks.contentValidation?.passed === false) failedChecks.push('Content — ' + (checks.contentValidation.issues?.join('; ') || 'Failed'));
+                else if (checks.contentValidation) passedChecks.push('Content');
+                
+                if (checks.linkValidation?.broken > 0) failedChecks.push('Links — ' + checks.broken + ' of ' + checks.checked + ' broken');
+                else if (checks.linkValidation) passedChecks.push('Links');
+                
+                if (checks.ssl?.valid === false || checks.ssl?.daysUntilExpiry < 30) failedChecks.push('SSL — ' + (checks.ssl.daysUntilExpiry < 30 ? 'Expiring in ' + checks.ssl.daysUntilExpiry + ' days' : 'Invalid'));
+                else if (checks.ssl) passedChecks.push('SSL');
+                
+                if (checks.dns?.resolved === false) failedChecks.push('DNS — ' + (checks.dns.error || 'Failed'));
+                else if (checks.dns) passedChecks.push('DNS');
+                
+                const duration = inc.resolvedAt && inc.createdAt ? Math.round((inc.resolvedAt.toDate() - inc.createdAt.toDate()) / 60000) + 'min' : 'Ongoing';
+                const created = inc.createdAt?.toDate?.() || new Date();
+                const timeStr = created.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) + ' EAT';
+                
+                return (
+                  <div key={inc.id} className="border border-gray-700 rounded-lg overflow-hidden">
+                    <div className={`flex items-center justify-between px-4 py-3 ${inc.isResolved ? 'bg-gray-800' : 'bg-red-900/30'}`}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg">{inc.isResolved ? '✅' : '🔴'}</span>
+                        <span className="font-medium">{inc.isResolved ? 'Resolved' : 'CRITICAL'}</span>
+                      </div>
+                      <div className="text-xs text-gray-400">{timeStr} — Duration: {duration}</div>
+                    </div>
+                    
+                    <div className="p-4 bg-[#0D0D18]">
+                      <div className="text-cyan-400 font-medium mb-2">"{inc.title || inc.reason || 'Downtime'}"</div>
+                      
+                      {inc.description && (
+                        <div className="mb-4">
+                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">What happened</div>
+                          <p className="text-sm text-gray-300">{inc.description}</p>
+                        </div>
+                      )}
+                      
+                      {inc.affectedLocations && (
+                        <div className="mb-4">
+                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Affected locations</div>
+                          <div className={`${inc.isResolved ? 'text-green-400' : 'text-red-400'} block mb-1`}>❌ {inc.affectedLocations}</div>
+                          {inc.workingLocations && <div className="text-green-400">✅ {inc.workingLocations}</div>}
+                        </div>
+                      )}
+                      
+                      {failedChecks.length > 0 && (
+                        <div className="mb-4">
+                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Checks that failed</div>
+                          {failedChecks.map((c, i) => (
+                            <div key={i} className="text-red-400 text-sm flex items-center gap-2">❌ {c}</div>
+                          ))}
+                          {passedChecks.map((c, i) => (
+                            <div key={i} className="text-green-400 text-sm flex items-center gap-2">✅ {c}</div>
+                          ))}
+                        </div>
+                      )}
+                      
+                      {inc.timeline?.length > 0 && (
+                        <div className="mb-4">
+                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Timeline</div>
+                          {inc.timeline.map((t, i) => (
+                            <div key={i} className="text-gray-400 text-sm flex gap-2">
+                              <span className="text-cyan-400">{t.time?.toDate?.().toLocaleTimeString?.('en-GB', { hour: '2-digit', minute: '2-digit' }) || t.time}</span>
+                              <span>— {t.event}</span>
+                              {t.detail && <span className="text-gray-500">({t.detail})</span>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      
+                      <div className="flex gap-3 mt-4 pt-3 border-t border-gray-700">
+                        <button className="text-xs text-cyan-400 hover:text-cyan-300">Add Note</button>
+                        <button className="text-xs text-gray-400 hover:text-white">Download Report</button>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -2038,13 +2361,13 @@ const MonitorDetailPage = ({ monitorId }) => {
         <div className="card-glass p-6">
           <h3 className="font-bold mb-4">Response History</h3>
           <div className="space-y-2">
-            {Array.from({ length: 5 }, (_, i) => (
+            {history.length > 0 ? history.slice().reverse().slice(0, 20).map((h, i) => (
               <div key={i} className="flex items-center justify-between p-3 bg-gray-900 rounded-lg">
-                <span className="text-sm">{new Date(Date.now() - i * 3600000).toLocaleString()}</span>
-                <span className="text-green-400 text-sm">200 OK</span>
-                <span className="text-cyan-400 text-sm">{Math.floor(Math.random() * 200 + 50)}ms</span>
+                <span className="text-sm">{new Date(h.time).toLocaleString()}</span>
+                <span className={`text-sm ${h.status === 'down' ? 'text-red-400' : h.status === 'slow' ? 'text-amber-400' : 'text-green-400'}`}>{(h.status || 'up').toUpperCase()}</span>
+                <span className="text-cyan-400 text-sm">{h.responseTimeMs ? h.responseTimeMs + 'ms' : '—'}</span>
               </div>
-            ))}
+            )) : <div className="text-gray-500 text-sm">No checks recorded yet</div>}
           </div>
         </div>
       )}
@@ -2071,7 +2394,7 @@ const MonitorDetailPage = ({ monitorId }) => {
             ) : testResult ? (
               <>
                 <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div><div className="text-sm text-gray-400">Status</div><div className="text-green-400 font-bold">200 OK</div></div>
+                  <div><div className="text-sm text-gray-400">Status</div><div className={`font-bold ${testResult.ok ? 'text-green-400' : 'text-red-400'}`}>{testResult.status}{testResult.ok ? ' OK' : ''}{testResult.error ? ' — ' + testResult.error : ''}</div></div>
                   <div><div className="text-sm text-gray-400">Response Time</div><div className="text-cyan-400 font-bold">{testResult.time}ms</div></div>
                 </div>
                 <div className="flex gap-2">
@@ -2253,7 +2576,14 @@ const App = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const toast = (type, message) => setToastData({ type, message });
-  const navigate = (page) => { setCurrentPage(page); setMobileMenuOpen(false); };
+  const pageTitles = { landing: 'Welcome', login: 'Sign In', signup: 'Sign Up', verifyemail: 'Verify Email', dashboard: 'Dashboard', monitors: 'My Monitors', addmonitor: 'Add Monitor', monitor: 'Monitor Details', statuspages: 'Status Pages', reports: 'Reports', settings: 'Settings', apidocs: 'API Docs' };
+  
+  const navigate = (page) => {
+    setCurrentPage(page);
+    setMobileMenuOpen(false);
+    window.scrollTo(0, 0);
+    document.title = (pageTitles[page] || page) + ' — PulseGrid';
+  };
   const handleLogout = () => { setShowLogoutConfirm(true); };
   const confirmLogout = async () => { setShowLogoutConfirm(false); await auth.signOut(); };
   const cancelLogout = () => { setShowLogoutConfirm(false); };
